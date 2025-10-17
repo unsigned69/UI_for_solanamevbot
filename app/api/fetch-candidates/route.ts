@@ -11,6 +11,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    // NOTE: этот роут независим от статуса процесса бота; не импортировать runner.
     const { baseTokens, anchorTokens } = await readBaseAnchorTokens();
     const filters = parsed.data;
     const candidates = await fetchCandidatesAcrossDexes(filters, baseTokens, anchorTokens);

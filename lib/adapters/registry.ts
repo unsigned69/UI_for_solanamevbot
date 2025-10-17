@@ -1,10 +1,13 @@
 import type { DexId, FetchFilters, Candidate } from '../types/dex';
 import { MockDexAdapter } from './mock-dex';
+import { resolveParserRpcEndpoint } from './env';
+
+const parserRpcEndpoint = resolveParserRpcEndpoint();
 
 const adapters: Record<DexId, MockDexAdapter> = {
-  pumpfun: new MockDexAdapter('pumpfun'),
-  raydium: new MockDexAdapter('raydium'),
-  meteora: new MockDexAdapter('meteora'),
+  pumpfun: new MockDexAdapter('pumpfun', parserRpcEndpoint),
+  raydium: new MockDexAdapter('raydium', parserRpcEndpoint),
+  meteora: new MockDexAdapter('meteora', parserRpcEndpoint),
 };
 
 export async function fetchCandidatesAcrossDexes(filters: FetchFilters, baseTokens: string[], anchorTokens: string[]): Promise<Candidate[]> {

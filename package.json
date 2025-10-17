@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "parser:fetch": "ts-node --transpile-only scripts/parser-cli.ts",
+    "parser:write": "ts-node --transpile-only scripts/parser-cli.ts --write-config"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
@@ -25,6 +27,7 @@
     "@types/react-dom": "^18.2.25",
     "autoprefixer": "^10.4.16",
     "postcss": "^8.4.35",
+    "ts-node": "^10.9.2",
     "typescript": "^5.4.5"
   }
 }

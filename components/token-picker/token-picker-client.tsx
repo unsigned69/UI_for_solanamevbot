@@ -325,7 +325,7 @@ export default function TokenPickerClient() {
             <div>
               <p className="text-sm text-slate-400">Последний снимок: {timestampLabel}</p>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-col items-start gap-2 text-left sm:flex-row sm:items-center sm:gap-3">
               {error && <p className="text-sm text-red-300">{error}</p>}
               <button
                 className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-700"
@@ -334,6 +334,7 @@ export default function TokenPickerClient() {
               >
                 {isLoading ? 'Загрузка…' : 'Обновить данные'}
               </button>
+              <p className="text-xs text-slate-500">Парсер работает независимо от процесса бота. Запуск бота не обязателен.</p>
             </div>
           </div>
 

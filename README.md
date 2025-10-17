@@ -40,6 +40,7 @@ BOT_CMD="node ./bot/index.js"             # команда запуска бот
 BOT_WORKDIR="/absolute/path/to/bot"       # рабочая директория процесса
 BOT_CONFIG_PATH="/absolute/path/to/config.toml"   # путь к TOML конфигу
 RPC_ENDPOINT="https://..."                # используется для dry-валидаций (заглушка)
+PARSER_RPC_ENDPOINT="https://..."         # RPC для парсера кандидатов (если не задан, берётся RPC_ENDPOINT)
 EXTRA_FLAGS_DEFAULT=""                    # дополнительные флаги по умолчанию (опционально)
 ```
 
@@ -52,7 +53,42 @@ npm install         # установка зависимостей
 npm run dev         # запуск Next.js в режиме разработки
 npm run build       # сборка
 npm run start       # запуск production-билда
+npm run parser:fetch -- --filters '{"dexes":["pumpfun"],"poolTypes":["CPMM"]}'
+                     # однократный парсинг кандидатов из CLI
+npm run parser:write -- --filters '{...}' --managed '@/path/to/managed.json'
+                     # парсинг + запись управляемого блока (см. раздел ниже)
 ```
+
+## Парсер независим от запуска бота
+
+- Экран `/token-picker` и CLI парсер не проверяют состояние процесса бота и работают автономно.
+- Единственное требование к UI — наличие base/anchor токенов в TOML-конфиге. При их отсутствии кнопка «Обновить данные» заблокирована.
+- Бот можно запускать и останавливать отдельно на странице `/run`; логи относятся только к процессу бота.
+
+## CLI для парсера и записи конфига
+
+В директории `scripts/` расположен `parser-cli.ts`, который повторяет логику `/api/fetch-candidates`.
+
+```bash
+# Получить кандидатов (stdin не требуется)
+npm run parser:fetch -- --filters '{"dexes":["raydium"],"poolTypes":["CLMM"]}'
+
+# Провести dry-валидацию текущего управляемого блока
+npm run parser:fetch -- --filters '{"dexes":[],"poolTypes":["CPMM","CLMM","DLMM"]}' --dry-validate
+
+# Записать новый управляемый блок (данные берутся из файла после префикса @)
+npm run parser:write -- --filters '{"dexes":["meteora"],"poolTypes":["DLMM"]}' --managed '@/path/to/managed.json'
+
+# Можно передать JSON нового блока через STDIN, если не используется --managed
+cat ./managed.json | npm run parser:write -- --filters '{...}' --write-config
+```
+
+Флаги CLI:
+
+- `--filters <json>` — JSON со всеми полями `FetchFilters` (как в API `/api/fetch-candidates`).
+- `--dry-validate` — выполнить dry-валидацию управляемого блока (если не передан новый блок, берётся текущий из конфига).
+- `--write-config` — записать новый управляемый блок (требуется передать JSON через STDIN или `--managed '@path'`).
+- `--managed <json|@path>` — необязательный источник данных для нового блока (строка JSON или путь к файлу с префиксом `@`).
 
 ## Тест-план
 

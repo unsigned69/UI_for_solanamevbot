@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import type { DexAdapter, FetchContext } from './dex-adapter';
 import type { FetchFilters, PoolSnapshot, Candidate } from '../types/dex';
+import { describeParserRpcEndpoint } from './env';
 
 function makeMockPools(dex: FetchFilters['dexes'][number], context: FetchContext): PoolSnapshot[] {
   return context.baseTokens.slice(0, 2).map((baseMint, index) => ({
@@ -46,13 +47,17 @@ function buildCandidates(pools: PoolSnapshot[]): Candidate[] {
 }
 
 export class MockDexAdapter implements DexAdapter {
-  constructor(private readonly dexId: FetchFilters['dexes'][number]) {}
+  constructor(
+    private readonly dexId: FetchFilters['dexes'][number],
+    private readonly rpcEndpoint: string | null,
+  ) {}
 
   async fetchPools(input: { filters: FetchFilters; baseTokens: string[]; anchorTokens: string[] }): Promise<PoolSnapshot[]> {
     const context: FetchContext = {
       filters: input.filters,
       baseTokens: input.baseTokens,
       anchorTokens: input.anchorTokens,
+      rpcEndpoint: this.rpcEndpoint,
     };
     return makeMockPools(this.dexId, context);
   }
@@ -62,6 +67,10 @@ export class MockDexAdapter implements DexAdapter {
   }
 
   async buildCandidates(filters: FetchFilters, baseTokens: string[], anchorTokens: string[]): Promise<Candidate[]> {
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.debug(`[mock-dex:${this.dexId}] using parser RPC: ${describeParserRpcEndpoint(this.rpcEndpoint)}`);
+    }
     const pools = await this.fetchPools({ filters, baseTokens, anchorTokens });
     const enriched = await this.enrich(pools);
     return buildCandidates(enriched);

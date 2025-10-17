@@ -13,6 +13,7 @@ export interface FetchContext {
   filters: FetchFilters;
   baseTokens: string[];
   anchorTokens: string[];
+  rpcEndpoint?: string | null;
 }
 
 export type CandidateBuilder = (pools: PoolSnapshot[], context: FetchContext) => Candidate[];
