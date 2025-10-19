@@ -1,7 +1,7 @@
 #!/usr/bin/env ts-node
 import fs from 'fs/promises';
 import type { ManagedConfig } from '../lib/types/config';
-import type { Candidate } from '../lib/types/dex';
+import type { Candidate, DexSourceError } from '../lib/types/dex';
 import { fetchFiltersSchema } from '../lib/types/filter-schema';
 import { readBaseAnchorTokens } from '../lib/config/base-anchor-reader';
 import { fetchCandidatesAcrossDexes } from '../lib/adapters/registry';
@@ -116,6 +116,17 @@ async function loadManagedPayload(options: CliOptions): Promise<ManagedConfig | 
   return null;
 }
 
+function printDexErrors(errors: DexSourceError[]) {
+  if (!errors.length) {
+    return;
+  }
+  console.warn('Ошибки источников DEX:');
+  errors.forEach((error) => {
+    const status = error.status ? ` (status ${error.status})` : '';
+    console.warn(`  - ${error.dex}${status}: ${error.message}`);
+  });
+}
+
 function printCandidates(candidates: Candidate[]) {
   if (candidates.length === 0) {
     console.log('Кандидаты не найдены под заданные фильтры.');
@@ -145,11 +156,16 @@ async function main() {
 
   try {
     const { baseTokens, anchorTokens } = await readBaseAnchorTokens();
-    const candidates = await fetchCandidatesAcrossDexes(filters, baseTokens, anchorTokens);
+    const result = await fetchCandidatesAcrossDexes(filters, baseTokens, anchorTokens);
 
     console.log('Base tokens:', baseTokens.join(', ') || '—');
     console.log('Anchor tokens:', anchorTokens.join(', ') || '—');
-    printCandidates(candidates);
+    printDexErrors(result.errorsByDex);
+    if (result.successfulDexes.length === 0) {
+      console.error('Все источники вернули ошибку — кандидаты недоступны.');
+      process.exit(1);
+    }
+    printCandidates(result.candidates);
 
     const managedPayload = await loadManagedPayload(options);
 
@@ -166,10 +182,23 @@ async function main() {
       if (!managedPayload) {
         throw new Error('Не удалось получить данные управляемого блока для записи.');
       }
+      const report = validateManagedConfig(managedPayload);
+      if (!report.ok) {
+        console.error('Dry-валидация провалилась:', report.errors);
+        process.exit(1);
+      }
       const previous = await readManagedConfig();
-      await writeManagedConfig(managedPayload);
       const diff = buildManagedDiff(previous.managed, managedPayload);
-      console.log('Управляемый блок записан. Diff:');
+      if (diff === 'No changes') {
+        console.log('Изменений не обнаружено — запись пропущена.');
+        return;
+      }
+      const result = await writeManagedConfig(managedPayload);
+      console.log('Управляемый блок записан.');
+      if (result.backupPath) {
+        console.log(`Бэкап: ${result.backupPath}`);
+      }
+      console.log('Diff:');
       console.log(diff);
     }
   } catch (error) {

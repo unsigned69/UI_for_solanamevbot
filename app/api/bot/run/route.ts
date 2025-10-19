@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { runPayloadSchema } from '../../../../lib/types/run-schema';
 import { botRunner } from '../../../../lib/runner/process-runner';
+import { prepareRunPayload } from '../../../../lib/runner/payload';
 
 export async function POST(request: Request) {
   const json = await request.json();
@@ -9,13 +10,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
   }
 
-  const payload = parsed.data;
-  if (payload.dryRun) {
-    payload.altOps = {};
-  }
-
   try {
-    await botRunner.start(payload);
+    const sanitized = prepareRunPayload(parsed.data);
+    await botRunner.start(sanitized);
     return NextResponse.json({ status: botRunner.getStatus() });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 400 });

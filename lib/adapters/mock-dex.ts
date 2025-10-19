@@ -1,9 +1,10 @@
 import { randomUUID } from 'crypto';
+import { retry } from '../net/retry';
 import type { DexAdapter, FetchContext } from './dex-adapter';
-import type { FetchFilters, PoolSnapshot, Candidate } from '../types/dex';
+import type { FetchFilters, PoolSnapshot, Candidate, DexId } from '../types/dex';
 import { describeParserRpcEndpoint } from './env';
 
-function makeMockPools(dex: FetchFilters['dexes'][number], context: FetchContext): PoolSnapshot[] {
+function makeMockPools(dex: DexId, context: FetchContext): PoolSnapshot[] {
   return context.baseTokens.slice(0, 2).map((baseMint, index) => ({
     dex,
     poolId: `${dex}-${index}-${randomUUID().slice(0, 6)}`,
@@ -47,10 +48,14 @@ function buildCandidates(pools: PoolSnapshot[]): Candidate[] {
 }
 
 export class MockDexAdapter implements DexAdapter {
+  public readonly id: DexId;
+
   constructor(
-    private readonly dexId: FetchFilters['dexes'][number],
+    dexId: DexId,
     private readonly rpcEndpoint: string | null,
-  ) {}
+  ) {
+    this.id = dexId;
+  }
 
   async fetchPools(input: { filters: FetchFilters; baseTokens: string[]; anchorTokens: string[] }): Promise<PoolSnapshot[]> {
     const context: FetchContext = {
@@ -59,7 +64,7 @@ export class MockDexAdapter implements DexAdapter {
       anchorTokens: input.anchorTokens,
       rpcEndpoint: this.rpcEndpoint,
     };
-    return makeMockPools(this.dexId, context);
+    return retry(async () => makeMockPools(this.id, context));
   }
 
   async enrich(pools: PoolSnapshot[]): Promise<PoolSnapshot[]> {
@@ -69,7 +74,7 @@ export class MockDexAdapter implements DexAdapter {
   async buildCandidates(filters: FetchFilters, baseTokens: string[], anchorTokens: string[]): Promise<Candidate[]> {
     if (process.env.NODE_ENV !== 'production') {
       // eslint-disable-next-line no-console
-      console.debug(`[mock-dex:${this.dexId}] using parser RPC: ${describeParserRpcEndpoint(this.rpcEndpoint)}`);
+      console.debug(`[mock-dex:${this.id}] using parser RPC: ${describeParserRpcEndpoint(this.rpcEndpoint)}`);
     }
     const pools = await this.fetchPools({ filters, baseTokens, anchorTokens });
     const enriched = await this.enrich(pools);

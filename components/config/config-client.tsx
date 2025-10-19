@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { ValidationReport } from '../../lib/config/validate';
 import type { ManagedConfig } from '../../lib/types/config';
 
 interface ReadResponse {
@@ -39,6 +40,17 @@ export default function ConfigClient() {
     }
   }, [managedText]);
 
+  const formatValidation = useCallback((report: ValidationReport) => {
+    if (!report) {
+      return null;
+    }
+    if (!report.ok) {
+      return `Ошибки: ${(report.errors ?? []).join('; ')}`;
+    }
+    const base = `OK. ALT ~${report.altCostEstimate}, compute ~${report.computeUnitsEstimate}.`;
+    return report.warnings?.length ? `${base} Предупреждения: ${report.warnings.join('; ')}` : base;
+  }, []);
+
   const handleValidate = async () => {
     setValidationMessage(null);
     if (!parsedManaged) {
@@ -50,17 +62,13 @@ export default function ConfigClient() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(parsedManaged),
     });
-    const data = await res.json();
+    const data = (await res.json()) as ValidationReport | { error?: string };
     if (!res.ok) {
-      setValidationMessage(data.error ?? 'Ошибка валидации');
+      const errorMessage = 'error' in data ? data.error : undefined;
+      setValidationMessage(errorMessage ?? 'Ошибка валидации');
       return;
     }
-    setValidationMessage(
-      data.ok
-        ? `OK. ALT ~${data.altCostEstimate}, compute ~${data.computeUnitsEstimate}.` +
-            (data.warnings?.length ? ` Предупреждения: ${data.warnings.join('; ')}` : '')
-        : `Ошибки: ${(data.errors ?? []).join('; ')}`,
-    );
+    setValidationMessage(formatValidation(data as ValidationReport));
   };
 
   const handleDiff = async () => {
@@ -97,9 +105,22 @@ export default function ConfigClient() {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error ?? 'Не удалось сохранить конфиг');
+        const errorMessage = Array.isArray(data.error) ? data.error.join('; ') : data.error;
+        throw new Error(errorMessage ?? 'Не удалось сохранить конфиг');
       }
-      setStatusMessage('Управляемый блок сохранён. Бэкап создан автоматически.');
+      if (data.diff) {
+        setDiffText(data.diff);
+      }
+      if (data.validation) {
+        setValidationMessage(formatValidation(data.validation as ValidationReport));
+      }
+      if (data.skipped) {
+        setStatusMessage('Изменений не обнаружено. Файл конфига не тронут.');
+      } else {
+        setStatusMessage(
+          `Управляемый блок сохранён.${data.backupPath ? ` Бэкап: ${data.backupPath}.` : ''}`,
+        );
+      }
     } catch (error) {
       setStatusMessage((error as Error).message);
     } finally {

@@ -11,10 +11,10 @@ export const runPayloadSchema = z.object({
     })
     .partial()
     .default({}),
-  altAddress: z.string().optional(),
+  altAddress: z.string().trim().optional(),
   accountsSource: z.enum(['auto', 'manual']).optional(),
   accountsManual: z.array(z.string()).optional(),
-  extraFlags: z.string().optional(),
+  extraFlags: z.union([z.string(), z.array(z.string())]).optional(),
 });
 
 export type RunPayloadInput = z.infer<typeof runPayloadSchema>;
