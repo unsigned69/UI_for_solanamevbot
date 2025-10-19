@@ -7,24 +7,6 @@ export interface DexSourceError {
   message: string;
 }
 
-export interface FetchFilters {
-  dexes: DexId[];
-  minTVL?: number;
-  minVol5m?: number;
-  minVol1h?: number;
-  minVol24h?: number;
-  minPoolAgeMinutes?: number;
-  maxSlippagePct?: number;
-  budget?: number;
-  poolTypes: PoolType[];
-  blacklistMints?: string[];
-  newerThanMinutesExclude?: number;
-  excludeFrozen?: boolean;
-  maxAltCost?: number;
-  page?: number;
-  pageSize?: number;
-}
-
 export interface PoolSnapshot {
   dex: DexId;
   poolId: string;

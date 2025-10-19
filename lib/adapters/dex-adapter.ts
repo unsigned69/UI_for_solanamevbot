@@ -1,4 +1,5 @@
-import type { Candidate, DexId, FetchFilters, PoolSnapshot } from '../types/dex';
+import type { Candidate, DexId, PoolSnapshot } from '../types/dex';
+import type { FetchFilters } from '../types/filter-schema';
 
 export interface DexAdapter {
   readonly id: DexId;

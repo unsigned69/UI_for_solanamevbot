@@ -18,6 +18,10 @@ const EXTRA_FLAG_ALLOWLIST: RegExp[] = [
   /^--[a-z0-9][a-z0-9-]*=[A-Za-z0-9._:\/-]+$/i,
 ];
 
+function isAllowedExtraFlag(flag: string): boolean {
+  return EXTRA_FLAG_ALLOWLIST.some((pattern) => pattern.test(flag));
+}
+
 function sanitizeBase58Address(value: string, context: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -25,6 +29,11 @@ function sanitizeBase58Address(value: string, context: string): string {
   }
   if (!BASE58_REGEX.test(trimmed)) {
     throw new Error(`${context} должен быть валидным Solana base58 адресом`);
+  }
+  try {
+    bs58.decode(trimmed);
+  } catch (error) {
+    throw new Error(`${context} содержит некорректный base58: ${(error as Error).message}`);
   }
   return trimmed;
 }
@@ -39,20 +48,31 @@ function toFlagList(input: string | string[]): string[] {
     .filter(Boolean);
 }
 
-export function sanitizeExtraFlagsInput(input?: string | string[] | null): string[] {
+function sanitizeExtraFlagsInput(input?: string | string[] | null): string[] {
   if (!input) {
     return [];
   }
   const values = toFlagList(input);
   const sanitized: string[] = [];
+  if (values.length > EXTRA_FLAG_MAX_COUNT) {
+    throw new Error(`Максимум ${EXTRA_FLAG_MAX_COUNT} дополнительных флагов`);
+  }
+  let totalLength = 0;
   for (const raw of values) {
     if (SHELL_META_CHARS.test(raw)) {
       throw new Error(`Флаг "${raw}" содержит запрещённые символы`);
     }
-    if (!EXTRA_FLAG_PATTERN.test(raw)) {
+    if (!isAllowedExtraFlag(raw)) {
       throw new Error(`Флаг "${raw}" имеет некорректный формат`);
     }
+    if (raw.length > EXTRA_FLAG_MAX_LENGTH) {
+      throw new Error(`Флаг "${raw}" превышает максимальную длину ${EXTRA_FLAG_MAX_LENGTH}`);
+    }
+    totalLength += raw.length;
     sanitized.push(raw);
+  }
+  if (totalLength > EXTRA_FLAG_TOTAL_LENGTH) {
+    throw new Error(`Суммарная длина флагов превышает ${EXTRA_FLAG_TOTAL_LENGTH} символов`);
   }
   return sanitized;
 }
@@ -61,18 +81,28 @@ function sanitizeManualAccounts(input?: string[] | null): string[] | undefined {
   if (!input || input.length === 0) {
     return undefined;
   }
-  const unique = new Set<string>();
+  const unique: string[] = [];
+  let totalLength = 0;
   for (const raw of input) {
     if (!raw) {
       continue;
     }
     const sanitized = sanitizeBase58Address(raw, 'Manual account');
-    unique.add(sanitized);
+    if (!unique.includes(sanitized)) {
+      unique.push(sanitized);
+      totalLength += sanitized.length;
+    }
   }
-  if (unique.size === 0) {
+  if (unique.length === 0) {
     return undefined;
   }
-  return Array.from(unique);
+  if (unique.length > MAX_MANUAL_ACCOUNTS) {
+    throw new Error(`Максимум ${MAX_MANUAL_ACCOUNTS} manual accounts`);
+  }
+  if (totalLength > MAX_MANUAL_ACCOUNTS_TOTAL_LENGTH) {
+    throw new Error('Суммарная длина manual accounts слишком велика');
+  }
+  return unique;
 }
 
 function sanitizeAltOps(
@@ -138,17 +168,10 @@ export function describeCommandArgsForPreview(args: string[], configPath: string
 }
 
 export function ensureConfigLockNotPresent(lockPath: string) {
-  try {
-    const stats = fs.statSync(lockPath);
-    if (stats.isFile()) {
-      throw new Error(
-        `Конфиг находится в процессе обновления (lock: ${path.basename(lockPath)}). Повторите запуск позже.`,
-      );
-    }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return;
-    }
-    throw error;
+  ensureLockFreshnessSync(lockPath);
+  if (isConfigLockActiveSync(lockPath)) {
+    throw new Error(
+      `Конфиг находится в процессе обновления (lock: ${path.basename(lockPath)}). Повторите запуск позже.`,
+    );
   }
 }

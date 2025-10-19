@@ -18,4 +18,4 @@ export const fetchFiltersSchema = z.object({
   pageSize: z.number().int().positive().max(200).optional(),
 });
 
-export type FetchFiltersInput = z.infer<typeof fetchFiltersSchema>;
+export type FetchFilters = z.infer<typeof fetchFiltersSchema>;
