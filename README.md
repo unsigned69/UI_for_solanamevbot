@@ -264,4 +264,4 @@ Manual UI scenarios:
 - **409** – conflict response during config writes (lock file or bot already running).
 - **Partial failure** – scenario where some DEX fail but at least one returns data.
 
-Если это приложение оказалось полезным, то можно отблагодарить донатом на сол кошелёк ELRtjwgUqkX9dDZFdYr2SjyzJ2nB3D4GT9JXGk4rMaah
+If you found this program usefull, you may make donation with some SOL ELRtjwgUqkX9dDZFdYr2SjyzJ2nB3D4GT9JXGk4rMaah
