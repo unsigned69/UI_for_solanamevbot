@@ -3,11 +3,11 @@ import fs from 'fs/promises';
 import type { ManagedConfig } from '../lib/types/config';
 import type { Candidate, DexSourceError } from '../lib/types/dex';
 import { fetchFiltersSchema } from '../lib/types/filter-schema';
-import { readBaseAnchorTokens } from '../lib/config/base-anchor-reader';
 import { fetchCandidatesAcrossDexes } from '../lib/adapters/registry';
 import { validateManagedConfig } from '../lib/config/validate';
 import { managedConfigSchema } from '../lib/config/schema';
 import { readManagedConfig, writeManagedConfig, buildManagedDiff } from '../lib/config/toml-managed-block';
+import { resolveStableMode } from '../lib/config/stable-mode';
 
 interface CliOptions {
   filters?: string;
@@ -155,11 +155,10 @@ async function main() {
   const filters = fetchFiltersSchema.parse(filtersPayload);
 
   try {
-    const { baseTokens, anchorTokens } = await readBaseAnchorTokens();
-    const result = await fetchCandidatesAcrossDexes(filters, baseTokens, anchorTokens);
+    const { mode: stableMode, stableMint } = await resolveStableMode();
+    const result = await fetchCandidatesAcrossDexes(filters);
 
-    console.log('Base tokens:', baseTokens.join(', ') || '—');
-    console.log('Anchor tokens:', anchorTokens.join(', ') || '—');
+    console.log('Stable mode:', stableMode, stableMint ? `(mint ${stableMint})` : '(disabled)');
     printDexErrors(result.errorsByDex);
     if (result.successfulDexes.length === 0) {
       console.error('Все источники вернули ошибку — кандидаты недоступны.');

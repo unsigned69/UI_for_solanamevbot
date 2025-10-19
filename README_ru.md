@@ -5,7 +5,7 @@
 - Подбор токенов выполняется только по кнопке и агрегирует ответы DEX через единый сервис с ретраями.
 - Конфиг TOML редактируется атомарно в управляемом блоке с diff, backup и dry-валидацией.
 - Runner собирает whitelisted CLI-команду, запускает процесс без shell и стримит логи по WebSocket.
-- Все base/anchor токены read-only: UI читает их из `config.toml`, обновление только вручную.
+- Маршрут всегда через SOL: WSOL — базовый актив, read-only stable-mode (`USDC`/`USD1`/`NONE`) задаётся вне UI.
 - ALT операции и дополнительные флаги проходят строгую санитизацию и валидацию перед запуском.
 
 _English version is available in [README.md](README.md)._ 
@@ -36,7 +36,7 @@ _English version is available in [README.md](README.md)._
 
 Ключевые принципы:
 - Парсер не зависит от процесса бота и не создает фоновых задач — данные обновляются **только** по нажатию кнопки.
-- Base/Anchor токены задаются вручную в `config.toml`; UI их только отображает (read-only).
+- Маршрут SOL-центричный: адаптеры работают только с парами WSOL, stable-mode (`USDC`/`USD1`/`NONE`) задаётся вне UI и отображается как read-only.
 - ALT-операции выбираются чекбоксами и транслируются в CLI-флаги при запуске; режим dry-run отключает ALT.
 - Запись управляемого блока TOML атомарна: lock-файл → temp-файл → rename → backup → diff.
 
@@ -44,7 +44,7 @@ _English version is available in [README.md](README.md)._
 Требования:
 - Node.js 18.18+ (LTS) с npm 9+.
 - Доступ к Solana RPC (достаточен публичный https endpoint).
-- Путь к TOML-конфигу бота с корректно заполненными base/anchor токенами.
+- Путь к TOML-конфигу с описанием торгуемых токенов (mint + ID пулов). Stable-mode настраивается через ENV или неуправляемый блок TOML.
 
 Команды запуска проекта:
 ```bash
@@ -68,6 +68,7 @@ npm run dev
 | `BOT_CONFIG_PATH` | `/abs/path/to/config.toml` | Абсолютный путь к TOML-конфигу. Используется парсером, экраном конфига и runner. |
 | `RPC_ENDPOINT` | `https://api.mainnet-beta.solana.com` | Основной RPC для бота; используется как fallback для парсера. |
 | `PARSER_RPC_ENDPOINT` | `https://api.mainnet-beta.solana.com` | RPC, который используют адаптеры при подборе токенов; по умолчанию берёт `RPC_ENDPOINT`. |
+| `STABLE_MODE` | `NONE` | Read-only режим SOL↔стейбл: `USDC`, `USD1` или `NONE`. Значение из ENV имеет приоритет над конфигом. |
 | `EXTRA_FLAGS_DEFAULT` | `""` (пусто) | Дополнительные CLI-флаги, которые runner добавляет к каждой команде после санитизации. |
 | `SMB_UI_CONFIG_LOCK_TTL_MS` | `120000` | TTL lock-файла конфигурации (мс). Просроченные lock удаляются автоматически. |
 
@@ -75,6 +76,7 @@ npm run dev
 ```env
 BOT_CONFIG_PATH=/abs/path/to/config.toml
 PARSER_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
+STABLE_MODE=USD1
 SMB_UI_CONFIG_LOCK_TTL_MS=120000
 ```
 
@@ -82,7 +84,7 @@ SMB_UI_CONFIG_LOCK_TTL_MS=120000
 - **UI (Next.js / React)** — страницы `/token-picker`, `/config`, `/run` работают в client mode и общаются с API-роутами.
 - **Сервис кандидатов** (`lib/services/fetch-candidates.ts`) — агрегирует ответы адаптеров, сортирует, дедуплицирует и пагинирует кандидатов; формирует payloadы 200/503.
 - **Адаптеры DEX** (`lib/adapters/*`) — обёртки поверх источников ликвидности с retry-логикой, унифицированными ошибками и поддержкой разных DEX.
-- **Конфиг** (`lib/config/*`) — чтение base/anchor, парсинг управляемого блока, валидация, diff, атомарная запись c lock/backups.
+- **Конфиг** (`lib/config/*`) — определение read-only stable-mode, парсинг управляемого блока, валидация, diff, атомарная запись с lock/backups.
 - **Runner** (`lib/runner/*`) — валидация payloadов, построение команд, spawn без shell, управление состоянием и буфером логов, WebSocket-раздача событий.
 
 ```mermaid
@@ -99,7 +101,7 @@ graph TD
 ```
 
 ## 5. Экран «Подбор токенов»
-Основной принцип — никаких автозапусков: данные обновляются только по кнопке «Обновить данные». Парсер читает base/anchor токены из конфига; если хотя бы один список пустой или не найден, показывается красный баннер и кнопка отключается.
+Основной принцип — никаких автозапусков: данные обновляются только по кнопке «Обновить данные». Маршрут SOL-центричный: адаптеры возвращают только пары WSOL, UI постоянно показывает строку `TOKEN ↔ SOL`, а read-only stable-mode (`USDC`/`USD1`/`NONE`) берётся из ENV/конфига. Никаких гейтов по наличию списков токенов нет.
 
 Доступные фильтры (`components/token-picker/filter-panel.tsx`, `lib/types/filter-schema.ts`):
 - DEX: `pumpfun`, `raydium`, `meteora`.
@@ -117,6 +119,7 @@ graph TD
 - Частичный сбой → HTTP 200, таблица данных + компактный баннер с `errorsByDex`.
 - Полный сбой (все адаптеры упали) → HTTP 503, красный баннер «Все источники недоступны», таблица пустая, кнопка «Обновить» активна (можно пробовать снова).
 - `errorsByDex` содержит максимум одну запись на DEX, сообщение обрезано до 200 символов.
+- Если `STABLE_MODE` = `USDC` или `USD1`, сервис проверяет наличие пула WSOL↔стейбл и помечает подходящие токены `triEligible` (плюс маленький бонус к score и бейдж «Tri-arb»).
 
 Примеры `curl` к `/api/fetch-candidates`:
 ```bash
@@ -128,23 +131,27 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
 ```json
 {
   "updatedAt": 1739900000000,
+  "stableMode": "USDC",
+  "stableMint": "EPjFWdd5AufqSSqeM2qZzEwG7NDT8f9n9whscWUG5t9",
   "candidates": [
     {
-      "mint": "So11111111111111111111111111111111111111112",
+      "mint": "ToKenMint1111111111111111111111111111111111",
       "pools": [{"dex":"raydium","poolId":"...","poolType":"CLMM"}],
       "tvlUsd": 12345.67,
       "vol1h": 890.12,
       "estSlippagePct": 0.42,
       "altCost": 3,
-      "score": 72.4
+      "score": 73.4,
+      "triEligible": true,
+      "triStable": "USDC"
     }
   ],
   "total": 1,
   "page": 1,
   "pageSize": 50,
   "fetchedAt": "2025-02-18T10:13:20.000Z",
-  "baseTokens": ["So111..."],
-  "anchorTokens": ["USDH..."],
+  "baseTokens": [],
+  "anchorTokens": [],
   "errorsByDex": [
     {"dex":"meteora","status":429,"message":"rate limited"}
   ]
@@ -154,6 +161,7 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
 ```json
 {
   "updatedAt": 1739900000000,
+  "stableMode": "NONE",
   "errorsByDex": [
     {"dex":"raydium","status":502,"message":"upstream error"},
     {"dex":"meteora","status":429,"message":"rate limited"},
@@ -171,7 +179,7 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
   # ...
   # <<< SMB-UI MANAGED END
   ```
-- Base/Anchor токены отображаются отдельным read-only блоком. Если чтение не удалось — показывается красный баннер.
+- Stable-mode отображается отдельным read-only блоком; торгуемые токены по-прежнему правятся вручную в TOML.
 - Перед записью `POST /api/config/write` выполняет:
   1. Проверку статуса бота (`RUNNING`/`STARTING` → 409).
   2. JSON-schema валидацию + `validateManagedConfig` (ALT/compute оценки, лимит 100 mint, предупреждения).
@@ -241,7 +249,7 @@ npm run build
 - `POST /api/bot/run` (валидный payload), `POST /api/bot/stop` (остановка), WebSocket `/api/bot/attach-logs`.
 
 Ручные сценарии UI:
-1. Base/Anchor отсутствуют → красный баннер, кнопка «Обновить» disabled.
+1. STABLE_MODE не задан или некорректен → трактуется как `NONE`, отображается как read-only статус.
 2. Частичный фейл адаптера → таблица с данными + жёлтый баннер.
 3. Полный фейл → красный баннер, таблица пустая, кнопка активна.
 4. Запись TOML при активном/просроченном lock.
@@ -257,7 +265,7 @@ npm run build
 - Контакты: Telegram [@Agropilot_UA](https://t.me/Agropilot_UA).
 
 ## Глоссарий
-- **Base/Anchor** — списки базовых и расчётных токенов, задаются вручную в `config.toml` вне управляемого блока.
+- **Stable-mode** — read-only настройка (ENV или неуправляемый блок TOML), выбирающая SOL↔USDC/USD1 плечо для треугольного маршрута.
 - **ALT** — Address Lookup Table операции (create/extend/deactivate/close), включаются флагами CLI.
 - **Managed block** — участок `config.toml`, который UI может изменять между маркерами `SMB-UI MANAGED`.
 - **503** — ответ API «Все источники недоступны» при подборе кандидатов.

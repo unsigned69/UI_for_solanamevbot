@@ -2,12 +2,11 @@ import type { Candidate } from '../../lib/types/dex';
 
 interface CandidatesTableProps {
   candidates: Candidate[];
-  canUpdate: boolean;
   allSourcesFailed: boolean;
   onRefresh: () => void;
 }
 
-export function CandidatesTable({ candidates, canUpdate, allSourcesFailed, onRefresh }: CandidatesTableProps) {
+export function CandidatesTable({ candidates, allSourcesFailed, onRefresh }: CandidatesTableProps) {
   return (
     <div className="overflow-x-auto">
       <table className="min-w-full text-left text-sm">
@@ -30,15 +29,22 @@ export function CandidatesTable({ candidates, canUpdate, allSourcesFailed, onRef
               <td className="px-3 py-6 text-center text-slate-500" colSpan={9}>
                 {allSourcesFailed
                   ? 'Все источники временно недоступны. Попробуйте обновить позже.'
-                  : canUpdate
-                    ? 'Нажмите «Обновить данные», чтобы получить кандидатов.'
-                    : 'Укажите base/anchor токены в конфиге.'}
+                  : 'Нажмите «Обновить данные», чтобы получить кандидатов.'}
               </td>
             </tr>
           )}
           {candidates.map((candidate) => (
             <tr key={candidate.mint} className="border-t border-slate-800/60">
-              <td className="px-3 py-2 font-mono text-xs text-emerald-200">{candidate.mint}</td>
+              <td className="px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-xs text-emerald-200">{candidate.mint}</span>
+                  {candidate.triEligible && (
+                    <span className="rounded-full border border-emerald-400/60 px-2 py-0.5 text-[10px] uppercase tracking-wide text-emerald-300">
+                      Tri-arb
+                    </span>
+                  )}
+                </div>
+              </td>
               <td className="px-3 py-2 text-xs text-slate-200">
                 {candidate.pools.map((pool) => (
                   <div key={pool.poolId}>

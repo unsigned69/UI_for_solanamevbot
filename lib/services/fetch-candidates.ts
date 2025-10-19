@@ -1,5 +1,5 @@
-import { readBaseAnchorTokens } from '../config/base-anchor-reader';
 import { fetchCandidatesAcrossDexes } from '../adapters/registry';
+import { resolveStableMode } from '../config/stable-mode';
 import type {
   FetchCandidatesFailurePayload,
   FetchCandidatesResponsePayload,
@@ -7,6 +7,7 @@ import type {
 } from '../types/api/fetch-candidates';
 import type { FetchFilters } from '../types/filter-schema';
 import type { Candidate } from '../types/dex';
+import type { StableMode } from '../types/stable-mode';
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 50;
@@ -55,11 +56,11 @@ function dedupeCandidates(candidates: Candidate[]): Candidate[] {
 
 function buildSuccessPayload(
   filters: FetchFilters,
-  baseTokens: string[],
-  anchorTokens: string[],
   candidates: FetchCandidatesSuccessPayload['candidates'],
   errorsByDex: FetchCandidatesSuccessPayload['errorsByDex'],
   timestamp: number,
+  stableMode: StableMode,
+  stableMint: string | null,
 ): FetchCandidatesSuccessPayload {
   const page = resolvePage(filters);
   const pageSize = resolvePageSize(filters);
@@ -75,20 +76,26 @@ function buildSuccessPayload(
     page,
     pageSize,
     fetchedAt: new Date(timestamp).toISOString(),
-    baseTokens,
-    anchorTokens,
+    baseTokens: [],
+    anchorTokens: [],
     errorsByDex,
     updatedAt: timestamp,
+    stableMode,
+    stableMint: stableMint ?? undefined,
   };
 }
 
 function buildFailurePayload(
   errorsByDex: FetchCandidatesFailurePayload['errorsByDex'],
   timestamp: number,
+  stableMode: StableMode,
+  stableMint: string | null,
 ): FetchCandidatesFailurePayload {
   return {
     errorsByDex,
     updatedAt: timestamp,
+    stableMode,
+    stableMint: stableMint ?? undefined,
   };
 }
 
@@ -97,24 +104,55 @@ interface CandidateSnapshot {
   payload: FetchCandidatesResponsePayload;
 }
 
+const TRI_ELIGIBLE_SCORE_BONUS = 1;
+
+function applyTriEligibility(
+  candidates: Candidate[],
+  stableMode: StableMode,
+  stableMint: string | null,
+): Candidate[] {
+  if (!stableMint) {
+    return candidates.map((candidate) => ({
+      ...candidate,
+      triEligible: false,
+      triStable: null,
+    }));
+  }
+
+  const stableDexes = new Set<string>();
+  candidates.forEach((candidate) => {
+    if (candidate.mint === stableMint) {
+      candidate.pools.forEach((pool) => stableDexes.add(pool.dex));
+    }
+  });
+
+  return candidates.map((candidate) => {
+    const isStableCandidate = candidate.mint === stableMint;
+    const eligible = !isStableCandidate && candidate.pools.some((pool) => stableDexes.has(pool.dex));
+    return {
+      ...candidate,
+      score: eligible ? candidate.score + TRI_ELIGIBLE_SCORE_BONUS : candidate.score,
+      triEligible: eligible,
+      triStable: stableMode,
+    };
+  });
+}
+
 export async function fetchCandidateSnapshot(filters: FetchFilters): Promise<CandidateSnapshot> {
-  const { baseTokens, anchorTokens } = await readBaseAnchorTokens();
-  const { candidates, errorsByDex, successfulDexes } = await fetchCandidatesAcrossDexes(
-    filters,
-    baseTokens,
-    anchorTokens,
-  );
+  const { mode: stableMode, stableMint } = await resolveStableMode();
+  const { candidates, errorsByDex, successfulDexes } = await fetchCandidatesAcrossDexes(filters);
+  const enrichedCandidates = applyTriEligibility(candidates, stableMode, stableMint);
   const timestamp = Date.now();
 
   if (successfulDexes.length === 0) {
     return {
       status: 503,
-      payload: buildFailurePayload(errorsByDex, timestamp),
+      payload: buildFailurePayload(errorsByDex, timestamp, stableMode, stableMint),
     };
   }
 
   return {
     status: 200,
-    payload: buildSuccessPayload(filters, baseTokens, anchorTokens, candidates, errorsByDex, timestamp),
+    payload: buildSuccessPayload(filters, enrichedCandidates, errorsByDex, timestamp, stableMode, stableMint),
   };
 }
