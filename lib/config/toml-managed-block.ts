@@ -5,10 +5,10 @@ import { parse, stringify } from '@iarna/toml';
 import { managedConfigSchema } from './schema';
 import type { ManagedConfig } from '../types/config';
 
-export const MANAGED_START_MARKER = '# >>> SMB-UI MANAGED START';
-export const MANAGED_WARNING_LINE = '# (не редактируйте вручную)';
-export const MANAGED_END_MARKER = '# <<< SMB-UI MANAGED END';
-export const CONFIG_LOCK_BASENAME = '.smb-ui-config.lock';
+const MANAGED_START_MARKER = '# >>> SMB-UI MANAGED START';
+const MANAGED_WARNING_LINE = '# (не редактируйте вручную)';
+const MANAGED_END_MARKER = '# <<< SMB-UI MANAGED END';
+const CONFIG_LOCK_BASENAME = '.smb-ui-config.lock';
 
 const DEFAULT_LOCK_TTL_MS = 10 * 60 * 1000; // 10 минут
 const LOCK_TTL_ENV_KEY = 'SMB_UI_CONFIG_LOCK_TTL_MS';
@@ -21,7 +21,7 @@ function resolveConfigPath(): string {
   return path.resolve(configPath);
 }
 
-export function resolveConfigLockTtlMs(): number {
+function resolveConfigLockTtlMs(): number {
   const raw = process.env[LOCK_TTL_ENV_KEY];
   if (raw === undefined || raw === '') {
     return DEFAULT_LOCK_TTL_MS;
@@ -233,11 +233,11 @@ async function writeAtomically(filePath: string, contents: string) {
   }
 }
 
-export interface WriteManagedOptions {
+interface WriteManagedOptions {
   skipBackup?: boolean;
 }
 
-export interface WriteManagedResult {
+interface WriteManagedResult {
   raw: string;
   backupPath?: string;
 }

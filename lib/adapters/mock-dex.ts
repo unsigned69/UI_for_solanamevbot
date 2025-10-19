@@ -1,7 +1,8 @@
 import { randomUUID } from 'crypto';
 import { retry } from '../net/retry';
 import type { DexAdapter, FetchContext } from './dex-adapter';
-import type { FetchFilters, PoolSnapshot, Candidate, DexId } from '../types/dex';
+import type { PoolSnapshot, Candidate, DexId } from '../types/dex';
+import type { FetchFilters } from '../types/filter-schema';
 import { describeParserRpcEndpoint } from './env';
 
 function makeMockPools(dex: DexId, context: FetchContext): PoolSnapshot[] {

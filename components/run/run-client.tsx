@@ -2,15 +2,12 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { BotStatus } from '../../lib/types/run';
+import type { RunnerEvent } from '../../lib/runner/process-runner';
 
 interface RunnerEventLog {
   stream: 'stdout' | 'stderr';
   message: string;
 }
-
-type RunnerSocketEvent =
-  | { type: 'state'; status?: BotStatus }
-  | { type: 'log'; stream: RunnerEventLog['stream']; message: string };
 
 export default function RunClient() {
   const [status, setStatus] = useState<BotStatus>({ state: 'IDLE' });
@@ -40,8 +37,8 @@ export default function RunClient() {
     const ws = new WebSocket(`${window.location.origin.replace('http', 'ws')}/api/bot/attach-logs`);
     ws.addEventListener('message', (event) => {
       try {
-        const data = JSON.parse(event.data) as RunnerSocketEvent;
-        if (data.type === 'state' && data.status) {
+        const data = JSON.parse(event.data) as RunnerEvent;
+        if (data.type === 'state') {
           setStatus(data.status);
         } else if (data.type === 'log') {
           const log: RunnerEventLog = {

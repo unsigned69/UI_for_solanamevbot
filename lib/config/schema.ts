@@ -16,5 +16,3 @@ export const managedConfigSchema = z.object({
   }),
 });
 
-export type ManagedMintConfigInput = z.infer<typeof managedMintConfigSchema>;
-export type ManagedConfigInput = z.infer<typeof managedConfigSchema>;

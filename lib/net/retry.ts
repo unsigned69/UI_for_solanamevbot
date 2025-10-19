@@ -1,6 +1,6 @@
 import { setTimeout as sleep } from 'timers/promises';
 
-export interface RetryOptions {
+interface RetryOptions {
   attempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
@@ -42,7 +42,7 @@ function extractStatus(error: unknown): number | undefined {
   return undefined;
 }
 
-export function isRetryableHttpStatus(status?: number): boolean {
+function isRetryableHttpStatus(status?: number): boolean {
   if (typeof status !== 'number') {
     return false;
   }
@@ -101,21 +101,21 @@ export async function retry<T>(fn: () => Promise<T>, options: RetryOptions = {})
   const jitterRatio = options.jitterRatio ?? DEFAULT_JITTER_RATIO;
   const shouldRetry = options.shouldRetry ?? defaultShouldRetry;
 
-  let attempt = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
       return await fn();
     } catch (error) {
-      attempt += 1;
-      if (attempt >= attempts || !shouldRetry(error)) {
+      const nextAttempt = attempt + 1;
+      if (nextAttempt >= attempts || !shouldRetry(error)) {
         throw error;
       }
-      const delayMs = computeDelayMs(attempt, baseDelayMs, maxDelayMs, jitterRatio);
-      options.onRetry?.(error, attempt, delayMs);
+      const delayMs = computeDelayMs(nextAttempt, baseDelayMs, maxDelayMs, jitterRatio);
+      options.onRetry?.(error, nextAttempt, delayMs);
       await sleep(delayMs);
     }
   }
+
+  throw new Error('Exhausted retry attempts');
 }
 
 export function describeRetryError(error: unknown): { status?: number; message: string } {

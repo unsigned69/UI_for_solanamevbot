@@ -1,9 +1,9 @@
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import EventEmitter from 'events';
-import { buildAltFlags, buildCommandPreview } from './cli-flags';
 import { getBotCommand, getBotWorkdir, getConfigPath, getExtraFlagsDefault } from './env';
-import { describeCommandArgsForPreview, ensureConfigLockNotPresent, sanitizeDefaultExtraFlags } from './payload';
+import { ensureConfigLockNotPresent } from './payload';
+import { buildRunCommand } from './command-builder';
 import { getConfigLockPath } from '../config/toml-managed-block';
 import type { BotStatus, BotState, RunPayload } from '../types/run';
 
@@ -11,13 +11,14 @@ export type RunnerEvent =
   | { type: 'state'; state: BotState; status: BotStatus }
   | { type: 'log'; stream: 'stdout' | 'stderr'; message: string };
 
-class BotProcessRunner {
-  private state: BotState = 'IDLE';
-  private process: ChildProcess | null = null;
-  private emitter = new EventEmitter();
-  private startedAt?: number;
-  private commandPreview = '';
-  private logBuffer: RunnerEvent[] = [];
+  class BotProcessRunner {
+    private state: BotState = 'IDLE';
+    private process: ChildProcess | null = null;
+    private emitter = new EventEmitter();
+    private subscribers = new Set<(event: RunnerEvent) => void>();
+    private startedAt?: number;
+    private commandPreview = '';
+    private logBuffer: RunnerEvent[] = [];
 
   private static readonly LOG_BUFFER_LIMIT = 500;
   private static readonly LOG_CHUNK_LIMIT = 8_192;
@@ -72,38 +73,25 @@ class BotProcessRunner {
     }
     this.transition('STARTING');
 
-    try {
-      const baseCommand = getBotCommand();
-      const configPath = getConfigPath();
-      const lockPath = getConfigLockPath();
-      ensureConfigLockNotPresent(lockPath);
+      try {
+        const baseCommand = getBotCommand();
+        const configPath = getConfigPath();
+        const lockPath = getConfigLockPath();
+        ensureConfigLockNotPresent(lockPath);
 
-      const args: string[] = ['--config', configPath];
-      if (payload.dryRun) {
-        args.push('--dry-run');
-      }
-      args.push(...buildAltFlags(payload.altOps));
-      if (payload.altAddress) {
-        args.push('--alt-address', payload.altAddress);
-      }
-      if (payload.accountsSource === 'manual' && payload.accountsManual?.length) {
-        args.push('--accounts', payload.accountsManual.join(','));
-      }
-      const defaultExtraFlags = sanitizeDefaultExtraFlags(getExtraFlagsDefault());
-      args.push(...defaultExtraFlags);
-      if (payload.extraFlags?.length) {
-        args.push(...payload.extraFlags);
-      }
+        const commandBuild = buildRunCommand(payload, {
+          configPath,
+          defaultExtraFlags: getExtraFlagsDefault(),
+          baseCommand,
+        });
+        this.commandPreview = commandBuild.commandPreview;
 
-      const previewArgs = describeCommandArgsForPreview(args, configPath);
-      this.commandPreview = buildCommandPreview(baseCommand, previewArgs);
-
-      const child = spawn(baseCommand, args, {
-        cwd: getBotWorkdir(),
-        shell: false,
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+        const child = spawn(commandBuild.command, commandBuild.args, {
+          cwd: getBotWorkdir(),
+          shell: false,
+          env: process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
       this.process = child;
       this.startedAt = Date.now();
       this.transition('RUNNING');

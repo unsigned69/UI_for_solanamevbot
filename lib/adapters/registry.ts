@@ -1,4 +1,5 @@
-import type { DexId, FetchFilters, Candidate, DexSourceError, FetchCandidatesResult } from '../types/dex';
+import type { DexId, Candidate, DexSourceError, FetchCandidatesResult } from '../types/dex';
+import type { FetchFilters } from '../types/filter-schema';
 import { describeRetryError } from '../net/retry';
 import { MockDexAdapter } from './mock-dex';
 import { resolveParserRpcEndpoint } from './env';

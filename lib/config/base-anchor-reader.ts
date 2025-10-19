@@ -4,10 +4,10 @@ import { parse } from '@iarna/toml';
 
 /** Этот модуль вызывается и парсером, и экраном Конфига. Он НЕ зависит от runner. */
 
-export const BASE_TOKENS_PATH: string[] = ['routing', 'baseTokens'];
-export const ANCHOR_TOKENS_PATH: string[] = ['routing', 'anchorTokens'];
+const BASE_TOKENS_PATH: string[] = ['routing', 'baseTokens'];
+const ANCHOR_TOKENS_PATH: string[] = ['routing', 'anchorTokens'];
 
-export interface BaseAnchorResult {
+interface BaseAnchorResult {
   baseTokens: string[];
   anchorTokens: string[];
 }
