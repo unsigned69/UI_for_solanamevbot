@@ -14,8 +14,7 @@ export type RunnerEvent =
 class BotProcessRunner {
   private state: BotState = 'IDLE';
   private process: ChildProcess | null = null;
-  private readonly emitter = new EventEmitter();
-  private readonly subscribers = new Set<(event: RunnerEvent) => void>();
+  private emitter = new EventEmitter();
   private startedAt?: number;
   private commandPreview = '';
   private logBuffer: RunnerEvent[] = [];
@@ -79,8 +78,6 @@ class BotProcessRunner {
       const lockPath = getConfigLockPath();
       ensureConfigLockNotPresent(lockPath);
 
-      this.logBuffer = [];
-
       const args: string[] = ['--config', configPath];
       if (payload.dryRun) {
         args.push('--dry-run');
@@ -111,49 +108,26 @@ class BotProcessRunner {
       this.startedAt = Date.now();
       this.transition('RUNNING');
 
-      const handleStdout = (chunk: Buffer) => {
-        this.emit({ type: 'log', stream: 'stdout', message: chunk.toString() });
-      };
+      child.stdout.on('data', (chunk: Buffer) => {
+        const message = chunk.toString();
+        this.emit({ type: 'log', stream: 'stdout', message });
+      });
 
-      const handleStderr = (chunk: Buffer) => {
-        this.emit({ type: 'log', stream: 'stderr', message: chunk.toString() });
-      };
+      child.stderr.on('data', (chunk: Buffer) => {
+        const message = chunk.toString();
+        this.emit({ type: 'log', stream: 'stderr', message });
+      });
 
-      const cleanupProcessListeners = () => {
-        child.stdout?.removeListener('data', handleStdout);
-        child.stderr?.removeListener('data', handleStderr);
-      };
+      child.on('close', (code) => {
+        this.process = null;
+        this.transition(code === 0 ? 'STOPPED' : 'ERROR');
+      });
 
-      let finalized = false;
-      const finalize = (nextState: BotState) => {
-        if (finalized) {
-          return;
-        }
-        finalized = true;
-        if (this.process === child) {
-          this.process = null;
-        }
-        this.startedAt = undefined;
-        this.transition(nextState);
-      };
-
-      const handleClose = (code: number | null) => {
-        cleanupProcessListeners();
-        child.removeListener('error', handleError);
-        finalize(code === 0 ? 'STOPPED' : 'ERROR');
-      };
-
-      const handleError = (error: Error) => {
-        cleanupProcessListeners();
-        child.removeListener('close', handleClose);
+      child.on('error', (error) => {
         this.emit({ type: 'log', stream: 'stderr', message: error.message });
-        finalize('ERROR');
-      };
-
-      child.stdout?.on('data', handleStdout);
-      child.stderr?.on('data', handleStderr);
-      child.once('close', handleClose);
-      child.once('error', handleError);
+        this.process = null;
+        this.transition('ERROR');
+      });
     } catch (error) {
       this.process = null;
       this.startedAt = undefined;

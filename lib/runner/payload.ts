@@ -26,14 +26,6 @@ function sanitizeBase58Address(value: string, context: string): string {
   if (!BASE58_REGEX.test(trimmed)) {
     throw new Error(`${context} должен быть валидным Solana base58 адресом`);
   }
-  try {
-    const decoded = bs58.decode(trimmed);
-    if (decoded.length !== 32) {
-      throw new Error(`${context} имеет неверную длину`);
-    }
-  } catch (error) {
-    throw new Error(`${context} должен быть валидным Solana base58 адресом`);
-  }
   return trimmed;
 }
 
@@ -47,40 +39,22 @@ function toFlagList(input: string | string[]): string[] {
     .filter(Boolean);
 }
 
-function sanitizeExtraFlagsInputInternal(input?: string | string[] | null): string[] {
+export function sanitizeExtraFlagsInput(input?: string | string[] | null): string[] {
   if (!input) {
     return [];
   }
   const values = toFlagList(input);
-  if (values.length > EXTRA_FLAG_MAX_COUNT) {
-    throw new Error(`Допустимо не более ${EXTRA_FLAG_MAX_COUNT} дополнительных флагов`);
-  }
-  const unique = new Set<string>();
-  let totalLength = 0;
+  const sanitized: string[] = [];
   for (const raw of values) {
-    if (!raw) {
-      continue;
-    }
     if (SHELL_META_CHARS.test(raw)) {
       throw new Error(`Флаг "${raw}" содержит запрещённые символы`);
     }
-    if (raw.length > EXTRA_FLAG_MAX_LENGTH) {
-      throw new Error(`Флаг "${raw}" превышает максимальную длину ${EXTRA_FLAG_MAX_LENGTH}`);
+    if (!EXTRA_FLAG_PATTERN.test(raw)) {
+      throw new Error(`Флаг "${raw}" имеет некорректный формат`);
     }
-    if (!EXTRA_FLAG_ALLOWLIST.some((pattern) => pattern.test(raw))) {
-      throw new Error(`Флаг "${raw}" имеет недопустимый формат`);
-    }
-    totalLength += raw.length;
-    if (totalLength > EXTRA_FLAG_TOTAL_LENGTH) {
-      throw new Error('Слишком большой набор дополнительных флагов');
-    }
-    unique.add(raw);
+    sanitized.push(raw);
   }
-  return Array.from(unique);
-}
-
-export function sanitizeExtraFlagsInput(input?: string | string[] | null): string[] {
-  return sanitizeExtraFlagsInputInternal(input);
+  return sanitized;
 }
 
 function sanitizeManualAccounts(input?: string[] | null): string[] | undefined {
@@ -93,17 +67,12 @@ function sanitizeManualAccounts(input?: string[] | null): string[] | undefined {
       continue;
     }
     const sanitized = sanitizeBase58Address(raw, 'Manual account');
-    if (!unique.has(sanitized) && unique.size >= MAX_MANUAL_ACCOUNTS) {
-      throw new Error(`Допустимо не более ${MAX_MANUAL_ACCOUNTS} manual account адресов`);
-    }
     unique.add(sanitized);
   }
-  const accounts = Array.from(unique);
-  const totalLength = accounts.reduce((acc, value) => acc + value.length, 0);
-  if (totalLength > MAX_MANUAL_ACCOUNTS_TOTAL_LENGTH) {
-    throw new Error('Слишком большой список manual accounts');
+  if (unique.size === 0) {
+    return undefined;
   }
-  return accounts.length ? accounts : undefined;
+  return Array.from(unique);
 }
 
 function sanitizeAltOps(
@@ -131,7 +100,7 @@ export function prepareRunPayload(input: RunPayloadInput): RunPayload {
     throw new Error('Укажите хотя бы один manual account или переключитесь в режим auto.');
   }
 
-  const extraFlags = sanitizeExtraFlagsInputInternal(input.extraFlags);
+  const extraFlags = sanitizeExtraFlagsInput(input.extraFlags);
   const altAddress = input.altAddress ? sanitizeBase58Address(input.altAddress, 'ALT address') : undefined;
 
   return {
@@ -148,7 +117,7 @@ export function sanitizeDefaultExtraFlags(raw: string): string[] {
   if (!raw) {
     return [];
   }
-  return sanitizeExtraFlagsInputInternal(raw);
+  return sanitizeExtraFlagsInput(raw);
 }
 
 export function describeCommandArgsForPreview(args: string[], configPath: string): string[] {
@@ -169,10 +138,17 @@ export function describeCommandArgsForPreview(args: string[], configPath: string
 }
 
 export function ensureConfigLockNotPresent(lockPath: string) {
-  ensureLockFreshnessSync(lockPath);
-  if (isConfigLockActiveSync(lockPath)) {
-    throw new Error(
-      `Конфиг находится в процессе обновления (lock: ${path.basename(lockPath)}). Повторите запуск позже.`,
-    );
+  try {
+    const stats = fs.statSync(lockPath);
+    if (stats.isFile()) {
+      throw new Error(
+        `Конфиг находится в процессе обновления (lock: ${path.basename(lockPath)}). Повторите запуск позже.`,
+      );
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return;
+    }
+    throw error;
   }
 }
