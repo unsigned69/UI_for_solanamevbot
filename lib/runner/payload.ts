@@ -1,12 +1,22 @@
-import fs from 'fs';
 import path from 'path';
+import bs58 from 'bs58';
 import type { RunPayload } from '../types/run';
 import type { RunPayloadInput } from '../types/run-schema';
 import { ALT_FLAG_MAP } from './cli-flags';
+import { ensureLockFreshnessSync, isConfigLockActiveSync } from '../config/toml-managed-block';
 
 const BASE58_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const EXTRA_FLAG_PATTERN = /^--[a-z0-9][a-z0-9-]*(?:=[A-Za-z0-9._:/@,+-]+)?$/i;
 const SHELL_META_CHARS = /[;&|`$<>]/;
+const MAX_MANUAL_ACCOUNTS = 16;
+const MAX_MANUAL_ACCOUNTS_TOTAL_LENGTH = 1024;
+const EXTRA_FLAG_MAX_COUNT = 16;
+const EXTRA_FLAG_MAX_LENGTH = 64;
+const EXTRA_FLAG_TOTAL_LENGTH = 512;
+const EXTRA_FLAG_ALLOWLIST: RegExp[] = [
+  /^--[a-z0-9][a-z0-9-]*$/i,
+  /^--[a-z0-9][a-z0-9-]*=\d+$/i,
+  /^--[a-z0-9][a-z0-9-]*=[A-Za-z0-9._:\/-]+$/i,
+];
 
 function sanitizeBase58Address(value: string, context: string): string {
   const trimmed = value.trim();

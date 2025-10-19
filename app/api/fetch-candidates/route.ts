@@ -14,13 +14,25 @@ export async function POST(request: Request) {
     // NOTE: этот роут независим от статуса процесса бота; не импортировать runner.
     const { baseTokens, anchorTokens } = await readBaseAnchorTokens();
     const filters = parsed.data;
-    const candidates = await fetchCandidatesAcrossDexes(filters, baseTokens, anchorTokens);
+    const { candidates, errorsByDex, successfulDexes } = await fetchCandidatesAcrossDexes(
+      filters,
+      baseTokens,
+      anchorTokens,
+    );
+    const updatedAt = new Date().toISOString();
 
     const page = filters.page ?? 0;
     const pageSize = filters.pageSize ?? 20;
     const start = page * pageSize;
     const end = start + pageSize;
     const paged = candidates.slice(start, end);
+
+    if (successfulDexes.length === 0) {
+      return NextResponse.json({
+        errorsByDex,
+        updatedAt,
+      }, { status: 503 });
+    }
 
     return NextResponse.json({
       candidates: paged,
@@ -29,7 +41,9 @@ export async function POST(request: Request) {
       pageSize,
       baseTokens,
       anchorTokens,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: updatedAt,
+      errorsByDex,
+      updatedAt,
     });
   } catch (error) {
     return NextResponse.json({ error: (error as Error).message }, { status: 400 });

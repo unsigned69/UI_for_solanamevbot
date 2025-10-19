@@ -1,6 +1,12 @@
 export type DexId = 'pumpfun' | 'raydium' | 'meteora';
 export type PoolType = 'CPMM' | 'CLMM' | 'DLMM';
 
+export interface DexSourceError {
+  dex: DexId;
+  status?: number;
+  message: string;
+}
+
 export interface FetchFilters {
   dexes: DexId[];
   minTVL?: number;
@@ -51,4 +57,11 @@ export interface Candidate {
   altCost: number;
   score: number;
   errors?: string[];
+}
+
+export interface FetchCandidatesResult {
+  candidates: Candidate[];
+  errorsByDex: DexSourceError[];
+  successfulDexes: DexId[];
+  attemptedDexes: DexId[];
 }

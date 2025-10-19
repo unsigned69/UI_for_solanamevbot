@@ -1,4 +1,5 @@
-import type { DexId, FetchFilters, Candidate } from '../types/dex';
+import type { DexId, FetchFilters, Candidate, DexSourceError, FetchCandidatesResult } from '../types/dex';
+import { describeRetryError } from '../net/retry';
 import { MockDexAdapter } from './mock-dex';
 import { resolveParserRpcEndpoint } from './env';
 
@@ -10,10 +11,55 @@ const adapters: Record<DexId, MockDexAdapter> = {
   meteora: new MockDexAdapter('meteora', parserRpcEndpoint),
 };
 
-export async function fetchCandidatesAcrossDexes(filters: FetchFilters, baseTokens: string[], anchorTokens: string[]): Promise<Candidate[]> {
-  const enabledDexes = filters.dexes.length ? filters.dexes : (Object.keys(adapters) as DexId[]);
-  const results = await Promise.all(
-    enabledDexes.map((dex) => adapters[dex].buildCandidates(filters, baseTokens, anchorTokens)),
+function normaliseDexList(requested: DexId[]): DexId[] {
+  const knownDexes = new Set(Object.keys(adapters) as DexId[]);
+  if (!requested.length) {
+    return Array.from(knownDexes);
+  }
+  return Array.from(new Set(requested.filter((dex) => knownDexes.has(dex))));
+}
+
+function buildDexError(dex: DexId, error: unknown): DexSourceError {
+  const { status, message } = describeRetryError(error);
+  const safeMessage = message?.slice(0, 200) ?? 'Неизвестная ошибка источника';
+  return {
+    dex,
+    status,
+    message: safeMessage,
+  };
+}
+
+export async function fetchCandidatesAcrossDexes(
+  filters: FetchFilters,
+  baseTokens: string[],
+  anchorTokens: string[],
+): Promise<FetchCandidatesResult> {
+  const enabledDexes = normaliseDexList(filters.dexes);
+  const attemptedDexes = enabledDexes.length ? enabledDexes : (Object.keys(adapters) as DexId[]);
+  const targetAdapters = attemptedDexes.map((dex) => adapters[dex]);
+
+  const settled = await Promise.allSettled(
+    targetAdapters.map((adapter) => adapter.buildCandidates(filters, baseTokens, anchorTokens)),
   );
-  return results.flat();
+
+  const aggregate: Candidate[] = [];
+  const errorsByDex: DexSourceError[] = [];
+  const successfulDexes: DexId[] = [];
+
+  settled.forEach((result, index) => {
+    const dex = targetAdapters[index].id;
+    if (result.status === 'fulfilled') {
+      aggregate.push(...result.value);
+      successfulDexes.push(dex);
+    } else {
+      errorsByDex.push(buildDexError(dex, result.reason));
+    }
+  });
+
+  return {
+    candidates: aggregate,
+    errorsByDex,
+    successfulDexes,
+    attemptedDexes: targetAdapters.map((adapter) => adapter.id),
+  };
 }

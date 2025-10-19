@@ -17,14 +17,44 @@ class BotProcessRunner {
   private emitter = new EventEmitter();
   private startedAt?: number;
   private commandPreview = '';
+  private logBuffer: RunnerEvent[] = [];
+
+  private static readonly LOG_BUFFER_LIMIT = 500;
+  private static readonly LOG_CHUNK_LIMIT = 8_192;
 
   subscribe(listener: (event: RunnerEvent) => void) {
+    this.subscribers.add(listener);
     this.emitter.on('event', listener);
-    return () => this.emitter.removeListener('event', listener);
+    this.logBuffer.forEach((event) => {
+      if (event.type === 'log') {
+        listener(event);
+      }
+    });
+    return () => {
+      this.subscribers.delete(listener);
+      this.emitter.removeListener('event', listener);
+    };
   }
 
   private emit(event: RunnerEvent) {
-    this.emitter.emit('event', event);
+    const payload: RunnerEvent =
+      event.type === 'log'
+        ? { ...event, message: this.sanitizeLogMessage(event.message) }
+        : event;
+    if (payload.type === 'log') {
+      this.logBuffer.push(payload);
+      if (this.logBuffer.length > BotProcessRunner.LOG_BUFFER_LIMIT) {
+        this.logBuffer.splice(0, this.logBuffer.length - BotProcessRunner.LOG_BUFFER_LIMIT);
+      }
+    }
+    this.emitter.emit('event', payload);
+  }
+
+  private sanitizeLogMessage(message: string): string {
+    if (!message || message.length <= BotProcessRunner.LOG_CHUNK_LIMIT) {
+      return message;
+    }
+    return `${message.slice(0, BotProcessRunner.LOG_CHUNK_LIMIT)}…`;
   }
 
   getStatus(): BotStatus {

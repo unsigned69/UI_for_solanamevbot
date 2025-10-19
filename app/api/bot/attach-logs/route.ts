@@ -17,15 +17,41 @@ export async function GET(request: Request) {
   const server = pair[1];
   server.accept?.();
 
-  const unsubscribe = botRunner.subscribe((event) => {
-    server.send(JSON.stringify(event));
+  let closed = false;
+  let unsubscribe: (() => void) | null = null;
+
+  const cleanup = () => {
+    if (closed) {
+      return;
+    }
+    closed = true;
+    unsubscribe?.();
+    try {
+      server.close();
+    } catch (error) {
+      // no-op: socket may already be closed
+    }
+  };
+
+  const safeSend = (event: unknown) => {
+    if (closed) {
+      return;
+    }
+    try {
+      server.send(JSON.stringify(event));
+    } catch (error) {
+      cleanup();
+    }
+  };
+
+  unsubscribe = botRunner.subscribe((event) => {
+    safeSend(event);
   });
 
-  server.addEventListener('close', () => {
-    unsubscribe();
-  });
+  server.addEventListener('close', cleanup);
+  server.addEventListener('error', cleanup);
 
-  server.send(JSON.stringify({ type: 'state', state: botRunner.getStatus().state, status: botRunner.getStatus() }));
+  safeSend({ type: 'state', state: botRunner.getStatus().state, status: botRunner.getStatus() });
 
   const response = new Response(null, { status: 101 });
   (response as any).webSocket = client;

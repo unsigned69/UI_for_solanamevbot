@@ -1,10 +1,10 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { Candidate } from '../../lib/types/dex';
+import type { Candidate, DexSourceError } from '../../lib/types/dex';
 import type { FetchFiltersInput } from '../../lib/types/filter-schema';
 
-interface FetchResponse {
+interface FetchResponseSuccess {
   candidates: Candidate[];
   total: number;
   page: number;
@@ -12,8 +12,16 @@ interface FetchResponse {
   fetchedAt: string;
   baseTokens: string[];
   anchorTokens: string[];
-  error?: string;
+  errorsByDex: DexSourceError[];
+  updatedAt: string;
 }
+
+interface FetchResponseError {
+  errorsByDex: DexSourceError[];
+  updatedAt: string;
+}
+
+type FetchResponse = FetchResponseSuccess | FetchResponseError;
 
 const defaultFilters: FetchFiltersInput = {
   dexes: ['pumpfun', 'raydium', 'meteora'],
@@ -21,6 +29,28 @@ const defaultFilters: FetchFiltersInput = {
   page: 0,
   pageSize: 20,
 };
+
+function isSuccessResponse(response: FetchResponse | null): response is FetchResponseSuccess {
+  return response !== null && 'candidates' in response;
+}
+
+function normaliseDexErrors(value: unknown): DexSourceError[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.reduce<DexSourceError[]>((acc, item) => {
+    if (!item || typeof item !== 'object') {
+      return acc;
+    }
+    const candidate = item as { dex?: unknown; status?: unknown; message?: unknown };
+    if (typeof candidate.dex !== 'string' || typeof candidate.message !== 'string') {
+      return acc;
+    }
+    const status = typeof candidate.status === 'number' ? candidate.status : undefined;
+    acc.push({ dex: candidate.dex as DexSourceError['dex'], status, message: candidate.message });
+    return acc;
+  }, []);
+}
 
 export default function TokenPickerClient() {
   const [filters, setFilters] = useState<FetchFiltersInput>(defaultFilters);
@@ -67,13 +97,37 @@ export default function TokenPickerClient() {
         body: JSON.stringify(filters),
       });
       const data = await response.json();
+      if (response.status === 503) {
+        const failure: FetchResponseError = {
+          errorsByDex: normaliseDexErrors(data.errorsByDex),
+          updatedAt: typeof data.updatedAt === 'string' ? data.updatedAt : new Date().toISOString(),
+        };
+        setLastResponse(failure);
+        return failure;
+      }
       if (!response.ok) {
         throw new Error(data.error ?? 'Не удалось получить кандидатов');
       }
-      setLastResponse(data);
-      setBaseTokens(data.baseTokens ?? []);
-      setAnchorTokens(data.anchorTokens ?? []);
-      return data;
+      const success: FetchResponseSuccess = {
+        candidates: Array.isArray(data.candidates) ? data.candidates : [],
+        total: typeof data.total === 'number' ? data.total : 0,
+        page: typeof data.page === 'number' ? data.page : 0,
+        pageSize: typeof data.pageSize === 'number' ? data.pageSize : filters.pageSize ?? 20,
+        fetchedAt: typeof data.fetchedAt === 'string' ? data.fetchedAt : new Date().toISOString(),
+        baseTokens: Array.isArray(data.baseTokens) ? data.baseTokens : [],
+        anchorTokens: Array.isArray(data.anchorTokens) ? data.anchorTokens : [],
+        errorsByDex: normaliseDexErrors(data.errorsByDex),
+        updatedAt:
+          typeof data.updatedAt === 'string'
+            ? data.updatedAt
+            : typeof data.fetchedAt === 'string'
+              ? data.fetchedAt
+              : new Date().toISOString(),
+      };
+      setLastResponse(success);
+      setBaseTokens(success.baseTokens ?? []);
+      setAnchorTokens(success.anchorTokens ?? []);
+      return success;
     } catch (err) {
       setError((err as Error).message);
       return null;
@@ -84,15 +138,19 @@ export default function TokenPickerClient() {
 
   const fetchData = useCallback(async () => {
     const data = await requestCandidates();
-    if (data) {
-      setCandidates(data.candidates ?? []);
+    if (isSuccessResponse(data)) {
+      setCandidates(data.candidates);
+    } else if (data) {
+      setCandidates([]);
     }
   }, [requestCandidates]);
 
-  const refreshSingle = async (mint: string) => {
+  const refreshSingle = async () => {
     const data = await requestCandidates();
-    if (data?.candidates) {
+    if (isSuccessResponse(data)) {
       setCandidates(data.candidates);
+    } else if (data) {
+      setCandidates([]);
     }
   };
 
@@ -100,9 +158,19 @@ export default function TokenPickerClient() {
   const poolTypeOptions = ['CPMM', 'CLMM', 'DLMM'] as const;
 
   const timestampLabel = useMemo(() => {
-    if (!lastResponse?.fetchedAt) return '—';
-    return new Date(lastResponse.fetchedAt).toLocaleString();
+    const isoTimestamp = lastResponse?.updatedAt ?? (isSuccessResponse(lastResponse) ? lastResponse.fetchedAt : undefined);
+    if (!isoTimestamp) {
+      return '—';
+    }
+    const date = new Date(isoTimestamp);
+    if (Number.isNaN(date.getTime())) {
+      return '—';
+    }
+    return date.toLocaleString();
   }, [lastResponse]);
+
+  const dexErrors = lastResponse?.errorsByDex ?? [];
+  const allSourcesFailed = lastResponse !== null && !isSuccessResponse(lastResponse) && dexErrors.length > 0;
 
   return (
     <div className="space-y-6">
@@ -338,6 +406,34 @@ export default function TokenPickerClient() {
             </div>
           </div>
 
+          {allSourcesFailed ? (
+            <div className="rounded border border-red-500/60 bg-red-900/20 p-4 text-sm text-red-200">
+              <p className="font-semibold uppercase tracking-wide">Все источники недоступны</p>
+              <ul className="mt-3 space-y-1 text-xs uppercase text-red-100">
+                {dexErrors.map((dexError, index) => (
+                  <li key={`${dexError.dex}-${index}`} className="normal-case">
+                    <span className="font-semibold capitalize text-red-200">{dexError.dex}</span>
+                    {typeof dexError.status === 'number' && <span> · {dexError.status}</span>}
+                    <span className="block text-red-100">{dexError.message}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : dexErrors.length > 0 ? (
+            <div className="rounded border border-amber-500/40 bg-amber-900/20 p-3 text-xs text-amber-100">
+              <p className="font-semibold uppercase tracking-wide text-amber-200">Часть источников ответила ошибкой</p>
+              <ul className="mt-2 space-y-1">
+                {dexErrors.map((dexError, index) => (
+                  <li key={`${dexError.dex}-${index}`} className="flex flex-wrap gap-1 text-amber-100">
+                    <span className="font-semibold capitalize text-amber-200">{dexError.dex}</span>
+                    {typeof dexError.status === 'number' && <span>({dexError.status})</span>}
+                    <span className="normal-case">— {dexError.message}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <div className="overflow-x-auto">
             <table className="min-w-full text-left text-sm">
               <thead className="bg-slate-900/80 text-xs uppercase text-slate-400">
@@ -357,7 +453,11 @@ export default function TokenPickerClient() {
                 {candidates.length === 0 && (
                   <tr>
                     <td className="px-3 py-6 text-center text-slate-500" colSpan={9}>
-                      {canUpdate ? 'Нажмите «Обновить данные», чтобы получить кандидатов.' : 'Укажите base/anchor токены в конфиге.'}
+                      {allSourcesFailed
+                        ? 'Все источники временно недоступны. Попробуйте обновить позже.'
+                        : canUpdate
+                          ? 'Нажмите «Обновить данные», чтобы получить кандидатов.'
+                          : 'Укажите base/anchor токены в конфиге.'}
                     </td>
                   </tr>
                 )}
@@ -390,7 +490,7 @@ export default function TokenPickerClient() {
                         <button className="rounded border border-slate-700 px-2 py-1" onClick={() => alert('Watchlist ' + candidate.mint)}>
                           Watchlist
                         </button>
-                        <button className="rounded border border-slate-700 px-2 py-1" onClick={() => refreshSingle(candidate.mint)}>
+                        <button className="rounded border border-slate-700 px-2 py-1" onClick={refreshSingle}>
                           ↻
                         </button>
                       </div>

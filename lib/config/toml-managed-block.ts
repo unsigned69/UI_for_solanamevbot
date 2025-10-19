@@ -1,4 +1,5 @@
-import fs from 'fs/promises';
+import fs from 'fs';
+import fsPromises from 'fs/promises';
 import path from 'path';
 import { parse, stringify } from '@iarna/toml';
 import { managedConfigSchema } from './schema';
@@ -9,12 +10,27 @@ export const MANAGED_WARNING_LINE = '# (не редактируйте вручн
 export const MANAGED_END_MARKER = '# <<< SMB-UI MANAGED END';
 export const CONFIG_LOCK_BASENAME = '.smb-ui-config.lock';
 
+const DEFAULT_LOCK_TTL_MS = 10 * 60 * 1000; // 10 минут
+const LOCK_TTL_ENV_KEY = 'SMB_UI_CONFIG_LOCK_TTL_MS';
+
 function resolveConfigPath(): string {
   const configPath = process.env.BOT_CONFIG_PATH;
   if (!configPath) {
     throw new Error('BOT_CONFIG_PATH не задан в окружении');
   }
   return path.resolve(configPath);
+}
+
+export function resolveConfigLockTtlMs(): number {
+  const raw = process.env[LOCK_TTL_ENV_KEY];
+  if (raw === undefined || raw === '') {
+    return DEFAULT_LOCK_TTL_MS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error(`${LOCK_TTL_ENV_KEY} должно быть неотрицательным числом миллисекунд`);
+  }
+  return parsed;
 }
 
 export function getConfigLockPath(): string {
@@ -25,29 +41,108 @@ export function getConfigLockPath(): string {
 
 async function ensureFileExists(filePath: string) {
   try {
-    await fs.access(filePath);
+    await fsPromises.access(filePath);
   } catch (error) {
     throw new Error(`Файл конфига не найден по пути ${filePath}`);
   }
 }
 
-async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
-  let handle: fs.FileHandle | null = null;
+function isLockStaleFromStats(stats: fs.Stats, ttlMs: number): boolean {
+  if (ttlMs <= 0) {
+    return false;
+  }
+  const ageMs = Date.now() - stats.mtimeMs;
+  return ageMs > ttlMs;
+}
+
+async function removeStaleLock(lockPath: string, ttlMs: number): Promise<boolean> {
+  if (ttlMs <= 0) {
+    return false;
+  }
   try {
-    handle = await fs.open(lockPath, 'wx');
-    await handle.writeFile(`locked-by=${process.pid}\n`);
+    const stats = await fsPromises.stat(lockPath);
+    if (!stats.isFile()) {
+      return false;
+    }
+    if (!isLockStaleFromStats(stats, ttlMs)) {
+      return false;
+    }
+    await fsPromises.unlink(lockPath);
+    return true;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error('Конфиг обновляется другим процессом. Повторите попытку позже.');
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
     }
     throw error;
   }
-  return async () => {
-    if (handle) {
-      await handle.close();
+}
+
+function removeStaleLockSync(lockPath: string, ttlMs: number): boolean {
+  if (ttlMs <= 0) {
+    return false;
+  }
+  try {
+    const stats = fs.statSync(lockPath);
+    if (!stats.isFile()) {
+      return false;
     }
-    await fs.unlink(lockPath).catch(() => undefined);
-  };
+    if (!isLockStaleFromStats(stats, ttlMs)) {
+      return false;
+    }
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export function isConfigLockActiveSync(lockPath: string): boolean {
+  const ttlMs = resolveConfigLockTtlMs();
+  try {
+    const stats = fs.statSync(lockPath);
+    if (!stats.isFile()) {
+      return false;
+    }
+    if (isLockStaleFromStats(stats, ttlMs)) {
+      fs.unlinkSync(lockPath);
+      return false;
+    }
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
+  const ttlMs = resolveConfigLockTtlMs();
+  while (true) {
+    let handle: fsPromises.FileHandle | null = null;
+    try {
+      handle = await fsPromises.open(lockPath, 'wx');
+      await handle.writeFile(`locked-by=${process.pid}\n`);
+      return async () => {
+        if (handle) {
+          await handle.close();
+        }
+        await fsPromises.unlink(lockPath).catch(() => undefined);
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        const removed = await removeStaleLock(lockPath, ttlMs);
+        if (removed) {
+          continue;
+        }
+        throw new Error('Конфиг обновляется другим процессом. Повторите попытку позже.');
+      }
+      throw error;
+    }
+  }
 }
 
 async function withConfigLock<T>(configPath: string, fn: () => Promise<T>): Promise<T> {
@@ -63,7 +158,7 @@ async function withConfigLock<T>(configPath: string, fn: () => Promise<T>): Prom
 export async function readRawConfig(): Promise<string> {
   const configPath = resolveConfigPath();
   await ensureFileExists(configPath);
-  return fs.readFile(configPath, 'utf8');
+  return fsPromises.readFile(configPath, 'utf8');
 }
 
 function extractManagedBlock(raw: string): string | null {
@@ -90,8 +185,7 @@ function buildManagedSection(managed: ManagedConfig): string {
     .concat('\n');
 }
 
-export async function readManagedConfig(): Promise<{ managed: ManagedConfig; raw: string }>
-{
+export async function readManagedConfig(): Promise<{ managed: ManagedConfig; raw: string }> {
   const raw = await readRawConfig();
   const block = extractManagedBlock(raw);
   if (!block) {
@@ -123,18 +217,18 @@ async function createBackup(filePath: string, raw: string) {
   const dir = path.dirname(filePath);
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
   const backupPath = path.join(dir, `config.toml.bak-${stamp}`);
-  await fs.writeFile(backupPath, raw, 'utf8');
+  await fsPromises.writeFile(backupPath, raw, 'utf8');
   return backupPath;
 }
 
 async function writeAtomically(filePath: string, contents: string) {
   const dir = path.dirname(filePath);
   const tempPath = path.join(dir, `.smb-ui.tmp-${process.pid}-${Date.now()}`);
-  await fs.writeFile(tempPath, contents, 'utf8');
+  await fsPromises.writeFile(tempPath, contents, 'utf8');
   try {
-    await fs.rename(tempPath, filePath);
+    await fsPromises.rename(tempPath, filePath);
   } catch (error) {
-    await fs.unlink(tempPath).catch(() => undefined);
+    await fsPromises.unlink(tempPath).catch(() => undefined);
     throw error;
   }
 }
@@ -155,7 +249,7 @@ export async function writeManagedConfig(
   const configPath = resolveConfigPath();
   await ensureFileExists(configPath);
   return withConfigLock(configPath, async () => {
-    const raw = await fs.readFile(configPath, 'utf8');
+    const raw = await fsPromises.readFile(configPath, 'utf8');
     const nextRaw = applyManagedBlock(raw, managed);
     let backupPath: string | undefined;
     if (!options.skipBackup) {
@@ -178,4 +272,9 @@ export function buildManagedDiff(current: ManagedConfig, next: ManagedConfig): s
     currentToml,
     nextToml,
   ].join('\n');
+}
+
+export function ensureLockFreshnessSync(lockPath: string) {
+  const ttlMs = resolveConfigLockTtlMs();
+  removeStaleLockSync(lockPath, ttlMs);
 }
