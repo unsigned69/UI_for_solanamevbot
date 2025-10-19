@@ -27,7 +27,7 @@ _Русская версия документа доступна в [README_ru.m
 - [Glossary](#glossary)
 
 ## 1. What It Is and Who Needs It
-`smb-ui` is a local Next.js interface for the operator of a Solana MEV bot. It lets you manually screen candidate tokens, manage the bot configuration, and control process execution without exposing private keys.
+`smb-ui` is a local Next.js interface for the operator of a Solana MEV bot (https://docs.solanamevbot.com/home/). It lets you manually screen candidate tokens, manage the bot configuration, and control process execution without exposing private keys.
 
 Three pillars:
 1. **Token picker** – a single form with filters and a manual “Refresh data” button to grab a fresh liquidity snapshot.
