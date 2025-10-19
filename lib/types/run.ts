@@ -6,7 +6,7 @@ export interface RunPayload {
   altAddress?: string;
   accountsSource?: 'auto' | 'manual';
   accountsManual?: string[];
-  extraFlags?: string;
+  extraFlags?: string[];
 }
 
 export interface BotStatus {

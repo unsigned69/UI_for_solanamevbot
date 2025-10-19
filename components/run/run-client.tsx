@@ -8,6 +8,10 @@ interface RunnerEventLog {
   message: string;
 }
 
+type RunnerSocketEvent =
+  | { type: 'state'; status?: BotStatus }
+  | { type: 'log'; stream: RunnerEventLog['stream']; message: string };
+
 export default function RunClient() {
   const [status, setStatus] = useState<BotStatus>({ state: 'IDLE' });
   const [dryRun, setDryRun] = useState(false);
@@ -36,19 +40,26 @@ export default function RunClient() {
     const ws = new WebSocket(`${window.location.origin.replace('http', 'ws')}/api/bot/attach-logs`);
     ws.addEventListener('message', (event) => {
       try {
-        const data = JSON.parse(event.data);
+        const data = JSON.parse(event.data) as RunnerSocketEvent;
         if (data.type === 'state' && data.status) {
           setStatus(data.status);
         } else if (data.type === 'log') {
-          setLogs((prev) => {
-            const next = [...prev, { stream: data.stream, message: data.message }];
-            return next.slice(-500);
+          const log: RunnerEventLog = {
+            stream: data.stream as RunnerEventLog['stream'],
+            message: String(data.message ?? ''),
+          };
+          setLogs((prev: RunnerEventLog[]) => {
+            const next: RunnerEventLog[] = [...prev, log];
+            return next.length > 500 ? next.slice(-500) : next;
           });
         }
       } catch (error) {
-        setLogs((prev) => {
-          const next = [...prev, { stream: 'stderr', message: `WS parse error: ${(error as Error).message}` }];
-          return next.slice(-500);
+        setLogs((prev: RunnerEventLog[]) => {
+          const next: RunnerEventLog[] = [
+            ...prev,
+            { stream: 'stderr', message: `WS parse error: ${(error as Error).message}` },
+          ];
+          return next.length > 500 ? next.slice(-500) : next;
         });
       }
     });

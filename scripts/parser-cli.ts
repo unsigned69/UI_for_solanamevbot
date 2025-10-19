@@ -166,10 +166,23 @@ async function main() {
       if (!managedPayload) {
         throw new Error('Не удалось получить данные управляемого блока для записи.');
       }
+      const report = validateManagedConfig(managedPayload);
+      if (!report.ok) {
+        console.error('Dry-валидация провалилась:', report.errors);
+        process.exit(1);
+      }
       const previous = await readManagedConfig();
-      await writeManagedConfig(managedPayload);
       const diff = buildManagedDiff(previous.managed, managedPayload);
-      console.log('Управляемый блок записан. Diff:');
+      if (diff === 'No changes') {
+        console.log('Изменений не обнаружено — запись пропущена.');
+        return;
+      }
+      const result = await writeManagedConfig(managedPayload);
+      console.log('Управляемый блок записан.');
+      if (result.backupPath) {
+        console.log(`Бэкап: ${result.backupPath}`);
+      }
+      console.log('Diff:');
       console.log(diff);
     }
   } catch (error) {

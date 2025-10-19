@@ -1,7 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn } from 'child_process';
+import type { ChildProcess } from 'child_process';
 import EventEmitter from 'events';
 import { buildAltFlags, buildCommandPreview } from './cli-flags';
 import { getBotCommand, getBotWorkdir, getConfigPath, getExtraFlagsDefault } from './env';
+import { describeCommandArgsForPreview, ensureConfigLockNotPresent, sanitizeDefaultExtraFlags } from './payload';
+import { getConfigLockPath } from '../config/toml-managed-block';
 import type { BotStatus, BotState, RunPayload } from '../types/run';
 
 export type RunnerEvent =
@@ -10,7 +13,7 @@ export type RunnerEvent =
 
 class BotProcessRunner {
   private state: BotState = 'IDLE';
-  private process: ChildProcessWithoutNullStreams | null = null;
+  private process: ChildProcess | null = null;
   private emitter = new EventEmitter();
   private startedAt?: number;
   private commandPreview = '';
@@ -39,69 +42,123 @@ class BotProcessRunner {
     }
     this.transition('STARTING');
 
-    const baseCommand = getBotCommand();
-    const args: string[] = [];
-    const configPath = getConfigPath();
-    const altFlags = buildAltFlags(payload.altOps);
-    const defaultExtra = getExtraFlagsDefault();
+    try {
+      const baseCommand = getBotCommand();
+      const configPath = getConfigPath();
+      const lockPath = getConfigLockPath();
+      ensureConfigLockNotPresent(lockPath);
 
-    args.push('--config', configPath);
-    if (payload.dryRun) {
-      args.push('--dry-run');
-    }
-    args.push(...altFlags);
-    if (payload.altAddress) {
-      args.push('--alt-address', payload.altAddress);
-    }
-    if (payload.accountsSource === 'manual' && payload.accountsManual?.length) {
-      args.push('--accounts', payload.accountsManual.join(','));
-    }
-    if (defaultExtra) {
-      args.push(...defaultExtra.split(' ').filter(Boolean));
-    }
-    if (payload.extraFlags) {
-      args.push(...payload.extraFlags.split(' ').filter(Boolean));
-    }
+      const args: string[] = ['--config', configPath];
+      if (payload.dryRun) {
+        args.push('--dry-run');
+      }
+      args.push(...buildAltFlags(payload.altOps));
+      if (payload.altAddress) {
+        args.push('--alt-address', payload.altAddress);
+      }
+      if (payload.accountsSource === 'manual' && payload.accountsManual?.length) {
+        args.push('--accounts', payload.accountsManual.join(','));
+      }
+      const defaultExtraFlags = sanitizeDefaultExtraFlags(getExtraFlagsDefault());
+      args.push(...defaultExtraFlags);
+      if (payload.extraFlags?.length) {
+        args.push(...payload.extraFlags);
+      }
 
-    this.commandPreview = buildCommandPreview(payload, baseCommand);
-    const finalCommand = [baseCommand, ...args].join(' ');
+      const previewArgs = describeCommandArgsForPreview(args, configPath);
+      this.commandPreview = buildCommandPreview(baseCommand, previewArgs);
 
-    const child = spawn(finalCommand, {
-      cwd: getBotWorkdir(),
-      shell: true,
-      env: process.env,
-    });
-    this.process = child;
-    this.startedAt = Date.now();
-    this.transition('RUNNING');
+      const child = spawn(baseCommand, args, {
+        cwd: getBotWorkdir(),
+        shell: false,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      this.process = child;
+      this.startedAt = Date.now();
+      this.transition('RUNNING');
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      const message = chunk.toString();
-      this.emit({ type: 'log', stream: 'stdout', message });
-    });
+      child.stdout.on('data', (chunk: Buffer) => {
+        const message = chunk.toString();
+        this.emit({ type: 'log', stream: 'stdout', message });
+      });
 
-    child.stderr.on('data', (chunk: Buffer) => {
-      const message = chunk.toString();
-      this.emit({ type: 'log', stream: 'stderr', message });
-    });
+      child.stderr.on('data', (chunk: Buffer) => {
+        const message = chunk.toString();
+        this.emit({ type: 'log', stream: 'stderr', message });
+      });
 
-    child.on('close', (code) => {
+      child.on('close', (code) => {
+        this.process = null;
+        this.transition(code === 0 ? 'STOPPED' : 'ERROR');
+      });
+
+      child.on('error', (error) => {
+        this.emit({ type: 'log', stream: 'stderr', message: error.message });
+        this.process = null;
+        this.transition('ERROR');
+      });
+    } catch (error) {
       this.process = null;
-      this.transition(code === 0 ? 'STOPPED' : 'ERROR');
-    });
-
-    child.on('error', (error) => {
-      this.emit({ type: 'log', stream: 'stderr', message: error.message });
-      this.process = null;
+      this.startedAt = undefined;
+      this.commandPreview = '';
       this.transition('ERROR');
-    });
+      throw error;
+    }
   }
 
   async stop() {
     if (!this.process) {
       throw new Error('Бот не запущен');
     }
-    this.process.kill('SIGTERM');
+    const child = this.process;
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const cleanup = () => {
+        child.removeListener('close', handleClose);
+        child.removeListener('error', handleError);
+        clearTimeout(termTimer);
+        clearTimeout(killTimer);
+      };
+      const handleClose = () => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          resolve();
+        }
+      };
+      const handleError = (error: Error) => {
+        if (!settled) {
+          settled = true;
+          cleanup();
+          reject(error);
+        }
+      };
+
+      const termTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGTERM');
+        }
+      }, 5_000);
+
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGKILL');
+        }
+      }, 10_000);
+
+      child.once('close', handleClose);
+      child.once('error', handleError);
+
+      const signalSent = child.kill('SIGINT');
+      if (!signalSent) {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          handleClose();
+        } else {
+          handleError(new Error('Не удалось отправить сигнал процессу'));
+        }
+      }
+    });
   }
 
   private transition(state: BotState) {
