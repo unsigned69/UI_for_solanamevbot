@@ -8,7 +8,6 @@ export const fetchFiltersSchema = z.object({
   minVol24h: z.number().nonnegative().optional(),
   minPoolAgeMinutes: z.number().nonnegative().optional(),
   maxSlippagePct: z.number().nonnegative().optional(),
-  budget: z.number().nonnegative().optional(),
   poolTypes: z.array(z.enum(['CPMM', 'CLMM', 'DLMM'])).default([]),
   blacklistMints: z.array(z.string()).optional(),
   newerThanMinutesExclude: z.number().nonnegative().optional(),

@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { spawn } from 'child_process';
 import type { ChildProcess } from 'child_process';
 import EventEmitter from 'events';
@@ -6,15 +8,143 @@ import { ensureConfigLockNotPresent } from './payload';
 import { buildRunCommand } from './command-builder';
 import { getConfigLockPath } from '../config/toml-managed-block';
 import type { BotStatus, BotState, RunPayload } from '../types/run';
+import { uiLogger } from '../log/logger';
+
+export class PrelaunchCheckError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PrelaunchCheckError';
+  }
+}
 
 export type RunnerEvent =
   | { type: 'state'; state: BotState; status: BotStatus }
-  | { type: 'log'; stream: 'stdout' | 'stderr'; message: string };
+  | { type: 'log'; stream: 'stdout' | 'stderr'; message: string }
+  | { type: 'lifecycle'; event: 'STARTED' | 'ERROR'; status: BotStatus; message?: string };
 
 type SubscriberRecord = {
   listener: (event: RunnerEvent) => void;
   disposeOnStop?: () => void;
 };
+
+function parseCommandParts(raw: string): { executable: string; args: string[] } {
+  const tokens = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  const cleaned = tokens.map((token) => token.replace(/^['"]|['"]$/g, ''));
+  const [executable = '', ...args] = cleaned;
+  return { executable, args };
+}
+
+function ensureWorkdirExists(workdirRaw: string | undefined): string {
+  if (!workdirRaw) {
+    throw new PrelaunchCheckError('Workdir not found');
+  }
+  const resolved = path.resolve(workdirRaw);
+  try {
+    const stats = fs.statSync(resolved);
+    if (!stats.isDirectory()) {
+      throw new PrelaunchCheckError('Workdir not found');
+    }
+    fs.accessSync(resolved, fs.constants.R_OK);
+    return resolved;
+  } catch (error) {
+    if (error instanceof PrelaunchCheckError) {
+      throw error;
+    }
+    throw new PrelaunchCheckError('Workdir not found');
+  }
+}
+
+function ensureConfigExists(configPath: string): string {
+  const resolved = path.resolve(configPath);
+  try {
+    const stats = fs.statSync(resolved);
+    if (!stats.isFile()) {
+      throw new PrelaunchCheckError('Config not found');
+    }
+    fs.accessSync(resolved, fs.constants.R_OK);
+    return resolved;
+  } catch (error) {
+    if (error instanceof PrelaunchCheckError) {
+      throw error;
+    }
+    throw new PrelaunchCheckError('Config not found');
+  }
+}
+
+function shouldVerifyPath(command: string): boolean {
+  return /[\\/]/.test(command) || command.startsWith('.');
+}
+
+function ensureExecutableExists(executable: string, workdir: string) {
+  if (!executable) {
+    throw new PrelaunchCheckError('Executable not found');
+  }
+  if (!shouldVerifyPath(executable)) {
+    return;
+  }
+  const resolved = path.isAbsolute(executable) ? executable : path.resolve(workdir, executable);
+  try {
+    const stats = fs.statSync(resolved);
+    if (!stats.isFile() && !stats.isFIFO()) {
+      throw new PrelaunchCheckError('Executable not found');
+    }
+    fs.accessSync(resolved, fs.constants.X_OK);
+  } catch (error) {
+    if (error instanceof PrelaunchCheckError) {
+      throw error;
+    }
+    throw new PrelaunchCheckError('Executable not found');
+  }
+}
+
+function resolveNodeScriptPath(commandParts: { executable: string; args: string[] }, workdir: string): string | null {
+  if (!commandParts.executable) {
+    return null;
+  }
+  const baseName = path.basename(commandParts.executable).toLowerCase();
+  if (baseName !== 'node' && baseName !== 'node.exe') {
+    return null;
+  }
+  const [firstArg] = commandParts.args;
+  if (!firstArg || firstArg.startsWith('-')) {
+    return null;
+  }
+  return path.isAbsolute(firstArg) ? firstArg : path.resolve(workdir, firstArg);
+}
+
+function ensureNodeScriptExists(commandParts: { executable: string; args: string[] }, workdir: string) {
+  const scriptPath = resolveNodeScriptPath(commandParts, workdir);
+  if (!scriptPath) {
+    return;
+  }
+  try {
+    const stats = fs.statSync(scriptPath);
+    if (!stats.isFile()) {
+      throw new PrelaunchCheckError('Executable not found');
+    }
+    fs.accessSync(scriptPath, fs.constants.R_OK);
+  } catch (error) {
+    if (error instanceof PrelaunchCheckError) {
+      throw error;
+    }
+    throw new PrelaunchCheckError('Executable not found');
+  }
+}
+
+function isProcessAlive(child: ChildProcess): boolean {
+  if (typeof child.pid !== 'number' || child.pid <= 0) {
+    return false;
+  }
+  if (child.exitCode !== null) {
+    return false;
+  }
+  try {
+    process.kill(child.pid, 0);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
 
 class BotProcessRunner {
   private state: BotState = 'IDLE';
@@ -44,6 +174,10 @@ class BotProcessRunner {
         listener(event);
       }
     });
+    uiLogger.info('runner_ws_subscribers', {
+      action: 'attach',
+      count: this.subscribers.size,
+    });
     return () => {
       this.removeSubscriber(listener, 'manual');
     };
@@ -56,6 +190,11 @@ class BotProcessRunner {
     }
     this.emitter.removeListener('event', listener);
     this.subscribers.delete(listener);
+    uiLogger.info('runner_ws_subscribers', {
+      action: 'detach',
+      reason,
+      count: this.subscribers.size,
+    });
     if (reason === 'stop') {
       try {
         record.disposeOnStop?.();
@@ -85,6 +224,18 @@ class BotProcessRunner {
     this.emitter.emit('event', payload);
   }
 
+  private emitLifecycle(event: 'STARTED' | 'ERROR', message?: string) {
+    const payload: RunnerEvent = {
+      type: 'lifecycle',
+      event,
+      status: this.getStatus(),
+    };
+    if (message) {
+      payload.message = message;
+    }
+    this.emit(payload);
+  }
+
   private sanitizeLogMessage(message: string): string {
     if (!message || message.length <= BotProcessRunner.LOG_CHUNK_LIMIT) {
       return message;
@@ -105,81 +256,128 @@ class BotProcessRunner {
     if (this.process) {
       throw new Error('Бот уже запущен');
     }
-    this.transition('STARTING');
+    const baseCommand = getBotCommand();
+    const commandParts = parseCommandParts(baseCommand);
+    const workdir = ensureWorkdirExists(getBotWorkdir());
+    const configPathRaw = getConfigPath();
+    const configPath = ensureConfigExists(configPathRaw);
+    const lockPath = getConfigLockPath();
+    ensureConfigLockNotPresent(lockPath);
+
+    const commandBuild = buildRunCommand(payload, {
+      configPath,
+      defaultExtraFlags: getExtraFlagsDefault(),
+      baseCommand,
+    });
+    this.commandPreview = commandBuild.commandPreview;
 
     try {
-      const baseCommand = getBotCommand();
-      const configPath = getConfigPath();
-      const lockPath = getConfigLockPath();
-      ensureConfigLockNotPresent(lockPath);
+      ensureExecutableExists(commandParts.executable, workdir);
+      ensureNodeScriptExists(commandParts, workdir);
+    } catch (error) {
+      this.commandPreview = '';
+      throw error;
+    }
 
-      const commandBuild = buildRunCommand(payload, {
-        configPath,
-        defaultExtraFlags: getExtraFlagsDefault(),
-        baseCommand,
-      });
-      this.commandPreview = commandBuild.commandPreview;
+    this.transition('STARTING', { command: commandParts.executable });
 
-      const child = spawn(commandBuild.command, commandBuild.args, {
-        cwd: getBotWorkdir(),
+    const spawnArgs = [...commandParts.args, ...commandBuild.args];
+    let child: ChildProcess;
+    try {
+      child = spawn(commandParts.executable, spawnArgs, {
+        cwd: workdir,
         shell: false,
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-
-      this.process = child;
-      this.startedAt = Date.now();
-      this.transition('RUNNING');
-
-      const handleStdout = (chunk: Buffer) => {
-        const message = chunk.toString();
-        this.emit({ type: 'log', stream: 'stdout', message });
-      };
-      const handleStderr = (chunk: Buffer) => {
-        const message = chunk.toString();
-        this.emit({ type: 'log', stream: 'stderr', message });
-      };
-
-      child.stdout?.on('data', handleStdout);
-      child.stderr?.on('data', handleStderr);
-
-      let handleClose: (code: number | null) => void;
-      let handleError: (error: Error) => void;
-
-      const finalize = (state: BotState) => {
-        if (this.process !== child) {
-          return;
-        }
-        child.stdout?.off('data', handleStdout);
-        child.stderr?.off('data', handleStderr);
-        child.removeListener('close', handleClose);
-        child.removeListener('error', handleError);
-        this.process = null;
-        this.startedAt = undefined;
-        this.commandPreview = '';
-        this.transition(state);
-        this.disposeSubscribers();
-      };
-
-      handleClose = (code: number | null) => {
-        finalize(code === 0 ? 'STOPPED' : 'ERROR');
-      };
-
-      handleError = (error: Error) => {
-        this.emit({ type: 'log', stream: 'stderr', message: error.message });
-        finalize('ERROR');
-      };
-
-      child.once('close', handleClose);
-      child.once('error', handleError);
     } catch (error) {
+      const message = (error as Error).message;
+      uiLogger.error('runner_error', message, { phase: 'spawn', commandPreview: this.commandPreview });
+      this.transition('ERROR', { phase: 'spawn' });
+      this.emitLifecycle('ERROR', message);
+      this.commandPreview = '';
+      throw error;
+    }
+
+    this.process = child;
+
+    const handleStdout = (chunk: Buffer) => {
+      const message = chunk.toString();
+      this.emit({ type: 'log', stream: 'stdout', message });
+    };
+    const handleStderr = (chunk: Buffer) => {
+      const message = chunk.toString();
+      this.emit({ type: 'log', stream: 'stderr', message });
+    };
+
+    child.stdout?.on('data', handleStdout);
+    child.stderr?.on('data', handleStderr);
+
+    let spawnConfirmed = false;
+    let closed = false;
+
+    const finalize = (state: BotState, message?: string, meta: Record<string, unknown> = {}) => {
+      if (this.process !== child) {
+        return;
+      }
+      closed = true;
+      child.stdout?.off('data', handleStdout);
+      child.stderr?.off('data', handleStderr);
+      child.removeAllListeners('spawn');
+      child.removeAllListeners('close');
+      child.removeAllListeners('error');
+      const previewBefore = this.commandPreview;
       this.process = null;
       this.startedAt = undefined;
       this.commandPreview = '';
-      this.transition('ERROR');
+      this.transition(state, meta);
+      if (state === 'ERROR') {
+        uiLogger.error('runner_error', message ?? 'Runner exited with error', {
+          ...meta,
+          commandPreview: previewBefore,
+        });
+        this.emitLifecycle('ERROR', message);
+      }
       this.disposeSubscribers();
-      throw error;
-    }
+    };
+
+    const handleSpawn = () => {
+      if (this.process !== child || closed) {
+        return;
+      }
+      if (!isProcessAlive(child)) {
+        finalize('ERROR', 'Process exited before initialization', { phase: 'spawn_check' });
+        return;
+      }
+      spawnConfirmed = true;
+      this.startedAt = Date.now();
+      this.transition('RUNNING', { pid: child.pid });
+      uiLogger.info('runner_started', {
+        pid: child.pid ?? null,
+        commandPreview: this.commandPreview,
+      });
+      this.emitLifecycle('STARTED');
+    };
+
+    const handleClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      const gracefulSignals: ReadonlySet<NodeJS.Signals> = new Set(['SIGINT', 'SIGTERM']);
+      const success =
+        (signal !== null && gracefulSignals.has(signal)) || (signal === null && spawnConfirmed && code === 0);
+      const message = success
+        ? undefined
+        : `Exit code ${code ?? 'null'}${signal ? ` signal ${signal}` : ''}`;
+      const meta: Record<string, unknown> = { code, signal };
+      finalize(success ? 'IDLE' : 'ERROR', message, meta);
+    };
+
+    const handleError = (error: Error) => {
+      this.emit({ type: 'log', stream: 'stderr', message: error.message });
+      finalize('ERROR', error.message, { phase: 'process_error' });
+    };
+
+    child.once('spawn', handleSpawn);
+    child.once('close', handleClose);
+    child.once('error', handleError);
   }
 
   async stop() {
@@ -236,10 +434,19 @@ class BotProcessRunner {
     });
   }
 
-  private transition(state: BotState) {
+  private transition(state: BotState, meta: Record<string, unknown> = {}) {
+    const previous = this.state;
     this.state = state;
     const status = this.getStatus();
     this.emit({ type: 'state', state, status });
+    if (previous !== state) {
+      uiLogger.info('runner_state_change', {
+        from: previous,
+        to: state,
+        pid: status.pid ?? null,
+        ...meta,
+      });
+    }
   }
 }
 

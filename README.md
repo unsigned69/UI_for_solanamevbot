@@ -132,8 +132,6 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
 ```json
 {
   "updatedAt": 1739900000000,
-  "stableMode": "USDC",
-  "stableMint": "EPjFWdd5AufqSSqeM2qZzEwG7NDT8f9n9whscWUG5t9",
   "candidates": [
     {
       "mint": "ToKenMint1111111111111111111111111111111111",
@@ -151,8 +149,6 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
   "page": 1,
   "pageSize": 50,
   "fetchedAt": "2025-02-18T10:13:20.000Z",
-  "baseTokens": [],
-  "anchorTokens": [],
   "errorsByDex": [
     {"dex":"meteora","status":429,"message":"rate limited"}
   ]
@@ -162,7 +158,6 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
 ```json
 {
   "updatedAt": 1739900000000,
-  "stableMode": "NONE",
   "errorsByDex": [
     {"dex":"raydium","status":502,"message":"upstream error"},
     {"dex":"meteora","status":429,"message":"rate limited"},
@@ -180,8 +175,7 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
   # ...
   # <<< SMB-UI MANAGED END
   ```
-- Base/anchor tokens render in a separate read-only block. If loading fails, a red banner appears.
-- Stable-mode (if set) renders in a read-only badge; tradeable tokens are still managed manually in TOML.
+- Everything outside the markers remains untouched and must be edited manually in TOML.
 - Before writing, `POST /api/config/write` performs:
   1. Bot status check (`RUNNING`/`STARTING` → 409).
   2. JSON schema validation plus `validateManagedConfig` (ALT/compute checks, ≤100 mints, warnings).
@@ -197,11 +191,12 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
   - Up to 16 flags, each ≤64 characters, total length ≤256.
 - `altAddress` and manual accounts must be valid Solana base58 (32–44 chars, decoded via `bs58`). Up to 64 unique manual accounts.
 - Runner (`lib/runner/process-runner.ts`):
-  - Ensures the config is not locked (`ensureConfigLockNotPresent`).
-  - Builds the command via `buildRunCommand`, appending `--config <path>` and sanitized `EXTRA_FLAGS_DEFAULT`.
-  - Calls `spawn(cmd, args, { shell: false })`; stdout/stderr are truncated to 8192 chars with a ≤2000-line buffer.
-  - States: `IDLE → STARTING → RUNNING → STOPPED/ERROR`; status is available via `GET /api/bot/status` and WebSocket `/api/bot/attach-logs`.
-  - `POST /api/bot/stop` sends `SIGINT`, then `SIGTERM` after 5s, and `SIGKILL` after 10s if needed.
+  - Performs synchronous preflight checks (`BOT_WORKDIR`, executable, config) before transitioning to `STARTING`.
+  - Emits `STARTING` immediately after preflight; `RUNNING` is set only after the child process fires `spawn` and passes a liveness check. WebSocket clients receive a `STARTED` lifecycle event at that moment.
+  - Any error before a healthy spawn transitions directly to `ERROR` without faking `RUNNING`.
+  - On graceful completion the runner returns to `IDLE`; stop requests from `STARTING/RUNNING` send `SIGINT` with `SIGTERM`/`SIGKILL` fallbacks.
+  - State snapshots and lifecycle events stream through `/api/bot/attach-logs`.
+- UI logging writes NDJSON records to rotating files under `./logs/` (configurable via `SMB_UI_LOG_*`). Use `npm run ui:log:tail` to inspect the latest file.
 
 ## 8. Parser CLI
 `scripts/parser-cli.ts` exposes a non-UI interface:
@@ -251,7 +246,7 @@ API smoke tests:
 - `POST /api/bot/run` (valid payload), `POST /api/bot/stop` (graceful stop), WebSocket `/api/bot/attach-logs`.
 
 Manual UI scenarios:
-1. STABLE_MODE unset or invalid → treated as `NONE` and displayed as such in the UI.
+1. STABLE_MODE unset or invalid → resolved to `NONE` for backend scoring; the UI focuses on the managed block only.
 2. Partial adapter failure → table with data plus yellow banner.
 3. Complete failure → red banner, empty table, refresh button enabled.
 4. Config write with active/expired lock.

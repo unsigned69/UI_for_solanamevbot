@@ -62,7 +62,20 @@ export default function RunClient() {
         try {
           const data = JSON.parse(event.data) as RunnerEvent;
           if (data.type === 'state') {
-            setStatus(data.status);
+            if (data.status.state !== 'RUNNING') {
+              setStatus(data.status);
+            }
+          } else if (data.type === 'lifecycle') {
+            if (data.event === 'STARTED') {
+              setStatus(data.status);
+              setError(null);
+            }
+            if (data.event === 'ERROR') {
+              setStatus(data.status);
+              if (data.message) {
+                setError(data.message);
+              }
+            }
           } else if (data.type === 'log') {
             const log: RunnerEventLog = {
               stream: data.stream as RunnerEventLog['stream'],
@@ -136,6 +149,15 @@ export default function RunClient() {
       });
       const data = await res.json();
       if (!res.ok) {
+        if (res.status === 400 && data?.code === 'PRELAUNCH_CHECK_FAILED') {
+          setError(typeof data.message === 'string' ? data.message : 'Preflight failed');
+          setStatus((prev) =>
+            prev.state === 'IDLE'
+              ? prev
+              : { ...prev, state: 'IDLE', pid: undefined, startedAt: undefined, commandPreview: undefined },
+          );
+          return;
+        }
         throw new Error(data.error ?? 'Не удалось запустить бот');
       }
       setStatus(data.status);

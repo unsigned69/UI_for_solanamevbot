@@ -8,6 +8,7 @@ import {
 import { validateManagedConfig } from '../../../../lib/config/validate';
 import { diffManagedConfigs } from '../../../../lib/config/diff';
 import { botRunner } from '../../../../lib/runner/process-runner';
+import { uiLogger } from '../../../../lib/log/logger';
 
 export async function POST(request: Request) {
   const json = await request.json();
@@ -24,21 +25,62 @@ export async function POST(request: Request) {
 
     const validation = validateManagedConfig(parsed.data);
     if (!validation.ok) {
+      uiLogger.info('config_write_attempt', {
+        diff_empty: null,
+        diff_length: 0,
+        lock: 'skipped',
+        reason: 'validation_failed',
+      });
+      uiLogger.warn('config_write_result', 'validation_failed', { status: 'validation_failed' });
       return NextResponse.json({ error: validation.errors, validation }, { status: 400 });
     }
 
     const prev = await readManagedConfig();
     const diff = diffManagedConfigs(prev.managed, parsed.data);
     if (diff === 'No changes') {
+      uiLogger.info('config_write_attempt', {
+        diff_empty: true,
+        diff_length: 0,
+        lock: 'skipped',
+      });
+      uiLogger.info('config_write_result', { status: 'skipped', lock: 'skipped' });
       return NextResponse.json({ ok: true, diff, validation, skipped: true });
     }
 
-    const writeResult = await writeManagedConfig(parsed.data);
-    return NextResponse.json({ ok: true, diff, validation, backupPath: writeResult.backupPath });
-  } catch (error) {
-    if (error instanceof ConfigLockActiveError) {
-      return NextResponse.json({ error: error.message }, { status: error.status });
+    try {
+      const writeResult = await writeManagedConfig(parsed.data);
+      uiLogger.info('config_write_attempt', {
+        diff_empty: false,
+        diff_length: diff.length,
+        lock: writeResult.lockStatus,
+      });
+      uiLogger.info('config_write_result', {
+        status: 'ok',
+        backupPath: writeResult.backupPath,
+        lock: writeResult.lockStatus,
+      });
+      return NextResponse.json({ ok: true, diff, validation, backupPath: writeResult.backupPath });
+    } catch (error) {
+      if (error instanceof ConfigLockActiveError) {
+        uiLogger.info('config_write_attempt', {
+          diff_empty: false,
+          diff_length: diff.length,
+          lock: 'active',
+        });
+        uiLogger.warn('config_write_result', error.message, { status: 'locked', lock: 'active' });
+        return NextResponse.json({ error: error.message }, { status: error.status });
+      }
+      throw error;
     }
-    return NextResponse.json({ error: (error as Error).message }, { status: 500 });
+  } catch (error) {
+    const message = (error as Error).message;
+    uiLogger.info('config_write_attempt', {
+      diff_empty: null,
+      diff_length: 0,
+      lock: 'unknown',
+      reason: 'exception',
+    });
+    uiLogger.error('config_write_result', message, { status: 'error', lock: 'unknown' });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

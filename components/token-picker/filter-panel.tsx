@@ -122,16 +122,6 @@ export function FiltersPanel({ filters, onChange }: FiltersPanelProps) {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs uppercase text-slate-400">Бюджет (anchor denom)</span>
-          <input
-            className="rounded border border-slate-700 bg-slate-950/60 px-2 py-1"
-            type="number"
-            value={filters.budget ?? ''}
-            onChange={(e) => onChange('budget', parseNumber(e.target.value))}
-          />
-        </label>
-
-        <label className="flex flex-col gap-1">
           <span className="text-xs uppercase text-slate-400">Макс. slippage %</span>
           <input
             className="rounded border border-slate-700 bg-slate-950/60 px-2 py-1"
@@ -142,7 +132,7 @@ export function FiltersPanel({ filters, onChange }: FiltersPanelProps) {
         </label>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs uppercase text-slate-400">Max ALT cost</span>
+          <span className="text-xs uppercase text-slate-400">Макс. ALT cost</span>
           <input
             className="rounded border border-slate-700 bg-slate-950/60 px-2 py-1"
             type="number"

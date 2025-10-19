@@ -1,19 +1,35 @@
 import type { DexId, Candidate, DexSourceError, FetchCandidatesResult } from '../types/dex';
 import type { FetchFilters } from '../types/filter-schema';
 import { describeRetryError } from '../net/retry';
+import type { DexAdapter } from './dex-adapter';
 import { MockDexAdapter } from './mock-dex';
 import { resolveParserRpcEndpoint } from './env';
 
 const parserRpcEndpoint = resolveParserRpcEndpoint();
 
-const adapters: Record<DexId, MockDexAdapter> = {
-  pumpfun: new MockDexAdapter('pumpfun', parserRpcEndpoint),
-  raydium: new MockDexAdapter('raydium', parserRpcEndpoint),
-  meteora: new MockDexAdapter('meteora', parserRpcEndpoint),
-};
+function buildAdapterRegistry(): Map<DexId, DexAdapter> {
+  const registry = new Map<DexId, DexAdapter>();
+  const enableMockAdapters = process.env.NODE_ENV !== 'production' && process.env.USE_MOCK_ADAPTERS === '1';
+  if (enableMockAdapters) {
+    [
+      new MockDexAdapter('pumpfun', parserRpcEndpoint),
+      new MockDexAdapter('raydium', parserRpcEndpoint),
+      new MockDexAdapter('meteora', parserRpcEndpoint),
+    ].forEach((adapter) => {
+      registry.set(adapter.id, adapter);
+    });
+  }
+  return registry;
+}
+
+const adapterRegistry = buildAdapterRegistry();
+
+function getAvailableDexes(): DexId[] {
+  return Array.from(adapterRegistry.keys());
+}
 
 function normaliseDexList(requested: DexId[]): DexId[] {
-  const knownDexes = new Set(Object.keys(adapters) as DexId[]);
+  const knownDexes = new Set(getAvailableDexes());
   if (!requested.length) {
     return Array.from(knownDexes);
   }
@@ -30,13 +46,66 @@ function buildDexError(dex: DexId, error: unknown): DexSourceError {
   };
 }
 
-export async function fetchCandidatesAcrossDexes(filters: FetchFilters): Promise<FetchCandidatesResult> {
+export interface AdapterSettledMeta {
+  dex: DexId;
+  ok: boolean;
+  durationMs: number;
+  count?: number;
+  error?: unknown;
+}
+
+interface FetchAcrossDexesOptions {
+  onAdapterSettled?: (meta: AdapterSettledMeta) => void;
+}
+
+function resolveAdapters(dexes: DexId[]): DexAdapter[] {
+  return dexes
+    .map((dex) => adapterRegistry.get(dex))
+    .filter((adapter): adapter is DexAdapter => Boolean(adapter));
+}
+
+export async function fetchCandidatesAcrossDexes(
+  filters: FetchFilters,
+  options: FetchAcrossDexesOptions = {},
+): Promise<FetchCandidatesResult> {
   const enabledDexes = normaliseDexList(filters.dexes);
-  const attemptedDexes = enabledDexes.length ? enabledDexes : (Object.keys(adapters) as DexId[]);
-  const targetAdapters = attemptedDexes.map((dex) => adapters[dex]);
+  const availableDexes = getAvailableDexes();
+  const attemptedDexes = enabledDexes.length ? enabledDexes : availableDexes;
+  const targetAdapters = resolveAdapters(attemptedDexes);
+
+  if (targetAdapters.length === 0) {
+    return {
+      candidates: [],
+      errorsByDex: [],
+      successfulDexes: [],
+      attemptedDexes: [],
+    };
+  }
 
   const settled = await Promise.allSettled(
-    targetAdapters.map((adapter) => adapter.buildCandidates(filters)),
+    targetAdapters.map(async (adapter) => {
+      const startedAt = Date.now();
+      try {
+        const candidates = await adapter.buildCandidates(filters);
+        const durationMs = Date.now() - startedAt;
+        options.onAdapterSettled?.({
+          dex: adapter.id,
+          ok: true,
+          durationMs,
+          count: candidates.length,
+        });
+        return { adapter, candidates, durationMs };
+      } catch (error) {
+        const durationMs = Date.now() - startedAt;
+        options.onAdapterSettled?.({
+          dex: adapter.id,
+          ok: false,
+          durationMs,
+          error,
+        });
+        throw { adapter, error, durationMs };
+      }
+    }),
   );
 
   const aggregate: Candidate[] = [];
@@ -44,13 +113,17 @@ export async function fetchCandidatesAcrossDexes(filters: FetchFilters): Promise
   const successfulDexes: DexId[] = [];
 
   settled.forEach((result, index) => {
-    const dex = targetAdapters[index].id;
+    const adapter = targetAdapters[index];
+    const dex = adapter.id;
     if (result.status === 'fulfilled') {
-      aggregate.push(...result.value);
+      aggregate.push(...result.value.candidates);
       successfulDexes.push(dex);
     } else {
+      const reason = result.reason as { adapter: DexAdapter; error: unknown } | unknown;
+      const errorPayload =
+        reason && typeof reason === 'object' && 'error' in reason ? (reason as { error: unknown }).error : reason;
       if (!errorsByDex.has(dex)) {
-        errorsByDex.set(dex, buildDexError(dex, result.reason));
+        errorsByDex.set(dex, buildDexError(dex, errorPayload));
       }
     }
   });

@@ -131,8 +131,6 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
 ```json
 {
   "updatedAt": 1739900000000,
-  "stableMode": "USDC",
-  "stableMint": "EPjFWdd5AufqSSqeM2qZzEwG7NDT8f9n9whscWUG5t9",
   "candidates": [
     {
       "mint": "ToKenMint1111111111111111111111111111111111",
@@ -150,8 +148,6 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
   "page": 1,
   "pageSize": 50,
   "fetchedAt": "2025-02-18T10:13:20.000Z",
-  "baseTokens": [],
-  "anchorTokens": [],
   "errorsByDex": [
     {"dex":"meteora","status":429,"message":"rate limited"}
   ]
@@ -161,7 +157,6 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
 ```json
 {
   "updatedAt": 1739900000000,
-  "stableMode": "NONE",
   "errorsByDex": [
     {"dex":"raydium","status":502,"message":"upstream error"},
     {"dex":"meteora","status":429,"message":"rate limited"},
@@ -179,7 +174,7 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
   # ...
   # <<< SMB-UI MANAGED END
   ```
-- Stable-mode отображается отдельным read-only блоком; торгуемые токены по-прежнему правятся вручную в TOML.
+- Остальной TOML меняется вручную вне UI.
 - Перед записью `POST /api/config/write` выполняет:
   1. Проверку статуса бота (`RUNNING`/`STARTING` → 409).
   2. JSON-schema валидацию + `validateManagedConfig` (ALT/compute оценки, лимит 100 mint, предупреждения).
@@ -195,11 +190,12 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
   - Максимум 16 флагов, каждый ≤64 символов, суммарно ≤256.
 - `altAddress` и manual accounts валидируются как Solana base58 (32–44 символа, декодируются `bs58`). До 64 уникальных manual accounts.
 - Runner (`lib/runner/process-runner.ts`):
-  - Проверяет, что конфиг не залочен (`ensureConfigLockNotPresent`).
-  - Строит команду через `buildRunCommand`, добавляя `--config <path>` и sanitised `EXTRA_FLAGS_DEFAULT`.
-  - Запускает процесс `spawn(cmd, args, { shell: false })`; stdout/stderr режутся до 8192 символов, хранится буфер ≤2000 строк.
-  - Состояния: `IDLE → STARTING → RUNNING → STOPPED/ERROR`; статус доступен по `GET /api/bot/status` и WebSocket `/api/bot/attach-logs`.
-  - `POST /api/bot/stop` отправляет `SIGINT`, затем `SIGTERM` через 5 c, `SIGKILL` через 10 c при необходимости.
+  - Делает синхронный preflight (`BOT_WORKDIR`, исполняемый файл, конфиг) до перехода в `STARTING`.
+  - Отправляет состояние `STARTING` сразу после preflight; `RUNNING` устанавливается только после события `spawn` и проверки живости процесса. В этот момент WS присылает событие `STARTED`.
+  - Любая ошибка до успешного `spawn` приводит к `ERROR` без фиктивного `RUNNING`.
+  - При нормальном завершении состояние возвращается в `IDLE`; `stop` из `STARTING/RUNNING` отправляет `SIGINT` с `SIGTERM`/`SIGKILL` запасами.
+  - Состояния и lifecycle приходят через `/api/bot/attach-logs`.
+- Логи UI пишутся в `./logs/` в формате NDJSON с ротацией (см. `SMB_UI_LOG_*`). Хвост текущего файла: `npm run ui:log:tail`.
 
 ## 8. Parser CLI
 `scripts/parser-cli.ts` предоставляет интерфейс без UI:
@@ -249,7 +245,7 @@ npm run build
 - `POST /api/bot/run` (валидный payload), `POST /api/bot/stop` (остановка), WebSocket `/api/bot/attach-logs`.
 
 Ручные сценарии UI:
-1. STABLE_MODE не задан или некорректен → трактуется как `NONE`, отображается как read-only статус.
+1. STABLE_MODE не задан или некорректен → трактуется как `NONE` для серверных расчётов; UI редактирует только управляемый блок.
 2. Частичный фейл адаптера → таблица с данными + жёлтый баннер.
 3. Полный фейл → красный баннер, таблица пустая, кнопка активна.
 4. Запись TOML при активном/просроченном lock.

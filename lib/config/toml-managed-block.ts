@@ -4,6 +4,7 @@ import path from 'path';
 import { parse, stringify } from '@iarna/toml';
 import { managedConfigSchema } from './schema';
 import type { ManagedConfig } from '../types/config';
+import { uiLogger } from '../log/logger';
 
 const MANAGED_START_MARKER = '# >>> SMB-UI MANAGED START';
 const MANAGED_WARNING_LINE = '# (не редактируйте вручную)';
@@ -128,22 +129,40 @@ export function isConfigLockActiveSync(lockPath: string): boolean {
   }
 }
 
-async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
+type LockStatus = 'fresh' | 'stale_removed';
+
+interface LockHandle {
+  release: () => Promise<void>;
+  status: LockStatus;
+}
+
+async function acquireLock(lockPath: string): Promise<LockHandle> {
   const ttlMs = resolveConfigLockTtlMs();
+  let staleRemovedOnLastAttempt = false;
   while (true) {
     let handle: fsPromises.FileHandle | null = null;
     try {
       handle = await fsPromises.open(lockPath, 'wx');
       await handle.writeFile(`locked-by=${process.pid}\n`);
-      return async () => {
-        if (handle) {
-          await handle.close();
-        }
-        await fsPromises.unlink(lockPath).catch(() => undefined);
+      const status: LockStatus = staleRemovedOnLastAttempt ? 'stale_removed' : 'fresh';
+      uiLogger.info('config_lock_acquire', {
+        lockPath,
+        stale: status === 'stale_removed' ? 'removed' : 'fresh',
+      });
+      return {
+        status,
+        release: async () => {
+          if (handle) {
+            await handle.close();
+          }
+          await fsPromises.unlink(lockPath).catch(() => undefined);
+          uiLogger.info('config_lock_release', { lockPath });
+        },
       };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
         const removed = await removeStaleLock(lockPath, ttlMs);
+        staleRemovedOnLastAttempt = removed;
         if (removed) {
           continue;
         }
@@ -154,13 +173,16 @@ async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
   }
 }
 
-async function withConfigLock<T>(configPath: string, fn: () => Promise<T>): Promise<T> {
+async function withConfigLock<T>(
+  configPath: string,
+  fn: (meta: { lockStatus: LockStatus }) => Promise<T>,
+): Promise<T> {
   const lockPath = path.join(path.dirname(configPath), CONFIG_LOCK_BASENAME);
-  const release = await acquireLock(lockPath);
+  const handle = await acquireLock(lockPath);
   try {
-    return await fn();
+    return await fn({ lockStatus: handle.status });
   } finally {
-    await release();
+    await handle.release();
   }
 }
 
@@ -236,6 +258,7 @@ async function writeAtomically(filePath: string, contents: string) {
   await fsPromises.writeFile(tempPath, contents, 'utf8');
   try {
     await fsPromises.rename(tempPath, filePath);
+    uiLogger.info('config_rename_done', { from: tempPath, to: filePath });
   } catch (error) {
     await fsPromises.unlink(tempPath).catch(() => undefined);
     throw error;
@@ -249,6 +272,7 @@ interface WriteManagedOptions {
 interface WriteManagedResult {
   raw: string;
   backupPath?: string;
+  lockStatus: LockStatus;
 }
 
 export async function writeManagedConfig(
@@ -257,7 +281,7 @@ export async function writeManagedConfig(
 ): Promise<WriteManagedResult> {
   const configPath = resolveConfigPath();
   await ensureFileExists(configPath);
-  return withConfigLock(configPath, async () => {
+  return withConfigLock(configPath, async ({ lockStatus }) => {
     const raw = await fsPromises.readFile(configPath, 'utf8');
     const nextRaw = applyManagedBlock(raw, managed);
     let backupPath: string | undefined;
@@ -265,7 +289,7 @@ export async function writeManagedConfig(
       backupPath = await createBackup(configPath, raw);
     }
     await writeAtomically(configPath, nextRaw);
-    return { raw: nextRaw, backupPath };
+    return { raw: nextRaw, backupPath, lockStatus };
   });
 }
 

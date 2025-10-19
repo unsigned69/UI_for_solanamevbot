@@ -1,14 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { Candidate, DexSourceError } from '../../lib/types/dex';
 import type { FetchFilters } from '../../lib/types/filter-schema';
 import type {
   FetchCandidatesResponsePayload,
   FetchCandidatesSuccessPayload,
 } from '../../lib/types/api/fetch-candidates';
-import type { StableMode } from '../../lib/types/stable-mode';
-import { normaliseStableMode } from '../../lib/types/stable-mode';
 import { FiltersPanel, type FiltersChangeHandler } from './filter-panel';
 import { CandidatesTable } from './candidates-table';
 import { DexErrorBanner } from './dex-error-banner';
@@ -78,21 +76,6 @@ export default function TokenPickerClient() {
   const [isLoading, setIsLoading] = useState(false);
   const [lastResponse, setLastResponse] = useState<FetchCandidatesResponsePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [stableMode, setStableMode] = useState<StableMode>('NONE');
-  const [stableMint, setStableMint] = useState<string | null>(null);
-
-  const fetchStableMode = useCallback(async () => {
-    const res = await fetch('/api/config/read');
-    const data = await res.json();
-    const mode = normaliseStableMode(data.stableMode);
-    setStableMode(mode);
-    setStableMint(typeof data.stableMint === 'string' ? data.stableMint : null);
-  }, []);
-
-  useEffect(() => {
-    fetchStableMode();
-  }, [fetchStableMode]);
-
   const handleInputChange = useCallback<FiltersChangeHandler>((key, value) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   }, []);
@@ -112,11 +95,7 @@ export default function TokenPickerClient() {
         const failure = {
           errorsByDex,
           updatedAt: ensureTimestamp(data.updatedAt),
-          stableMode: normaliseStableMode(data.stableMode),
-          stableMint: typeof data.stableMint === 'string' ? data.stableMint : undefined,
         } satisfies FetchCandidatesResponsePayload;
-        setStableMode(normaliseStableMode(data.stableMode));
-        setStableMint(typeof data.stableMint === 'string' ? data.stableMint : null);
         setLastResponse(failure);
         return failure;
       }
@@ -132,16 +111,10 @@ export default function TokenPickerClient() {
           typeof data.pageSize === 'number' ? data.pageSize : filters.pageSize ?? defaultFilters.pageSize,
         fetchedAt:
           typeof data.fetchedAt === 'string' ? data.fetchedAt : new Date(updatedAt).toISOString(),
-        baseTokens: [],
-        anchorTokens: [],
         errorsByDex,
         updatedAt,
-        stableMode: normaliseStableMode(data.stableMode),
-        stableMint: typeof data.stableMint === 'string' ? data.stableMint : undefined,
       };
       setLastResponse(success);
-      setStableMode(success.stableMode ?? 'NONE');
-      setStableMint(success.stableMint ?? null);
       return success;
     } catch (err) {
       setError((err as Error).message);
@@ -175,29 +148,11 @@ export default function TokenPickerClient() {
 
   const dexErrors = lastResponse?.errorsByDex ?? [];
   const allSourcesFailed = lastResponse !== null && !isSuccessResponse(lastResponse) && dexErrors.length > 0;
-  const stableModeLabel = stableMode;
-
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-emerald-300">Подбор токенов</h1>
-        <p className="text-sm text-slate-400">
-          Данные загружаются только по кнопке «Обновить данные». SOL используется как маршрутная монета, стейбл-режим выбирается
-          вне UI.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-3">
-        <p className="text-sm text-slate-300">
-          Маршрут: <span className="font-semibold text-emerald-200">TOKEN ↔ SOL</span>
-        </p>
-        <p className="text-sm text-slate-400">
-          Стейбл-режим: <span className="font-semibold text-emerald-200">{stableModeLabel}</span>{' '}
-          <span className="text-xs text-slate-500">(read-only)</span>
-          {stableModeLabel !== 'NONE' && stableMint && (
-            <span className="ml-2 font-mono text-[10px] text-slate-500">{stableMint}</span>
-          )}
-        </p>
+        <p className="text-sm text-slate-400">Данные загружаются только по кнопке «Обновить данные».</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
