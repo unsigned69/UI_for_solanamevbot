@@ -84,6 +84,8 @@ function buildCandidates(pools: PoolSnapshot[]): Candidate[] {
         dex: pool.dex,
         poolId: pool.poolId,
         poolType: pool.poolType,
+        mintA: pool.mintA,
+        mintB: pool.mintB,
       });
       existing.tvlUsd += pool.tvlUsd ?? 0;
       existing.vol5m += pool.volume5m ?? 0;
@@ -103,6 +105,8 @@ function buildCandidates(pools: PoolSnapshot[]): Candidate[] {
           dex: pool.dex,
           poolId: pool.poolId,
           poolType: pool.poolType,
+          mintA: pool.mintA,
+          mintB: pool.mintB,
         },
       ],
       tvlUsd: pool.tvlUsd ?? 0,

@@ -9,7 +9,8 @@
     "lint": "eslint . --ext .ts,.tsx --max-warnings=0",
     "lint:next": "next lint",
     "parser:fetch": "ts-node --transpile-only --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"Node\"}' scripts/parser-cli.ts",
-    "parser:write": "ts-node --transpile-only --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"Node\"}' scripts/parser-cli.ts --write-config"
+    "parser:write": "ts-node --transpile-only --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"Node\"}' scripts/parser-cli.ts --write-config",
+    "ui:log:tail": "node scripts/log-tail.js 200"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",

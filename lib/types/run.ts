@@ -1,4 +1,4 @@
-export type BotState = 'IDLE' | 'STARTING' | 'RUNNING' | 'ERROR' | 'STOPPED';
+export type BotState = 'IDLE' | 'STARTING' | 'RUNNING' | 'ERROR';
 
 export interface RunPayload {
   dryRun: boolean;

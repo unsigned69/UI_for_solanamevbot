@@ -31,7 +31,10 @@ export interface PoolSnapshot {
 
 export interface Candidate {
   mint: string;
-  pools: Array<Pick<PoolSnapshot, 'dex' | 'poolId' | 'poolType'>>;
+  pools: Array<
+    Pick<PoolSnapshot, 'dex' | 'poolId' | 'poolType'> &
+      Partial<Pick<PoolSnapshot, 'mintA' | 'mintB'>>
+  >;
   tvlUsd: number;
   vol5m: number;
   vol1h: number;

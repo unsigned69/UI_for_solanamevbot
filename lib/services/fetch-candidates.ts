@@ -1,5 +1,7 @@
-import { fetchCandidatesAcrossDexes } from '../adapters/registry';
+import { fetchCandidatesAcrossDexes, type AdapterSettledMeta } from '../adapters/registry';
 import { resolveStableMode } from '../config/stable-mode';
+import { describeRetryError } from '../net/retry';
+import { uiLogger } from '../log/logger';
 import type {
   FetchCandidatesFailurePayload,
   FetchCandidatesResponsePayload,
@@ -7,7 +9,7 @@ import type {
 } from '../types/api/fetch-candidates';
 import type { FetchFilters } from '../types/filter-schema';
 import type { Candidate } from '../types/dex';
-import type { StableMode } from '../types/stable-mode';
+import { WSOL_MINT, type StableMode } from '../types/stable-mode';
 
 const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 50;
@@ -59,8 +61,6 @@ function buildSuccessPayload(
   candidates: FetchCandidatesSuccessPayload['candidates'],
   errorsByDex: FetchCandidatesSuccessPayload['errorsByDex'],
   timestamp: number,
-  stableMode: StableMode,
-  stableMint: string | null,
 ): FetchCandidatesSuccessPayload {
   const page = resolvePage(filters);
   const pageSize = resolvePageSize(filters);
@@ -76,27 +76,61 @@ function buildSuccessPayload(
     page,
     pageSize,
     fetchedAt: new Date(timestamp).toISOString(),
-    baseTokens: [],
-    anchorTokens: [],
     errorsByDex,
     updatedAt: timestamp,
-    stableMode,
-    stableMint: stableMint ?? undefined,
   };
 }
 
 function buildFailurePayload(
   errorsByDex: FetchCandidatesFailurePayload['errorsByDex'],
   timestamp: number,
-  stableMode: StableMode,
-  stableMint: string | null,
 ): FetchCandidatesFailurePayload {
   return {
     errorsByDex,
     updatedAt: timestamp,
-    stableMode,
-    stableMint: stableMint ?? undefined,
   };
+}
+
+function filterPoolsForWsol(pools: Candidate['pools']): Candidate['pools'] {
+  return pools.filter((pool) => pool.mintA === WSOL_MINT || pool.mintB === WSOL_MINT);
+}
+
+function filterCandidatesForWsol(candidates: Candidate[]): Candidate[] {
+  const filtered: Candidate[] = [];
+  candidates.forEach((candidate) => {
+    const pools = filterPoolsForWsol(candidate.pools);
+    if (!pools.length) {
+      return;
+    }
+    filtered.push({ ...candidate, pools });
+  });
+  return filtered;
+}
+
+function filterCandidatesByMaxAltCost(candidates: Candidate[], maxAltCost?: number): Candidate[] {
+  if (typeof maxAltCost !== 'number' || Number.isNaN(maxAltCost)) {
+    return candidates;
+  }
+  return candidates.filter((candidate) => candidate.altCost <= maxAltCost);
+}
+
+function logAdapterCompletion(meta: AdapterSettledMeta) {
+  if (meta.ok) {
+    uiLogger.info('adapter_done', {
+      dex: meta.dex,
+      status: 'ok',
+      count: meta.count ?? 0,
+      duration_ms: meta.durationMs,
+    });
+    return;
+  }
+  const { status, message } = describeRetryError(meta.error);
+  uiLogger.warn('adapter_done', message ?? 'Adapter error', {
+    dex: meta.dex,
+    status: 'error',
+    source_status: status,
+    duration_ms: meta.durationMs,
+  });
 }
 
 interface CandidateSnapshot {
@@ -140,19 +174,23 @@ function applyTriEligibility(
 
 export async function fetchCandidateSnapshot(filters: FetchFilters): Promise<CandidateSnapshot> {
   const { mode: stableMode, stableMint } = await resolveStableMode();
-  const { candidates, errorsByDex, successfulDexes } = await fetchCandidatesAcrossDexes(filters);
-  const enrichedCandidates = applyTriEligibility(candidates, stableMode, stableMint);
+  const { candidates, errorsByDex, successfulDexes } = await fetchCandidatesAcrossDexes(filters, {
+    onAdapterSettled: logAdapterCompletion,
+  });
+  const wsolCandidates = filterCandidatesForWsol(candidates);
+  const costFiltered = filterCandidatesByMaxAltCost(wsolCandidates, filters.maxAltCost);
+  const enrichedCandidates = applyTriEligibility(costFiltered, stableMode, stableMint);
   const timestamp = Date.now();
 
   if (successfulDexes.length === 0) {
     return {
       status: 503,
-      payload: buildFailurePayload(errorsByDex, timestamp, stableMode, stableMint),
+      payload: buildFailurePayload(errorsByDex, timestamp),
     };
   }
 
   return {
     status: 200,
-    payload: buildSuccessPayload(filters, enrichedCandidates, errorsByDex, timestamp, stableMode, stableMint),
+    payload: buildSuccessPayload(filters, enrichedCandidates, errorsByDex, timestamp),
   };
 }
