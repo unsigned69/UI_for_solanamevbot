@@ -21,12 +21,23 @@ function collectSensitiveValues(): string[] {
 
 const SENSITIVE_VALUES = collectSensitiveValues();
 
+const MAX_STRING_LENGTH = 2_048;
+
+function clampLargeString(value: string): string {
+  if (value.length <= MAX_STRING_LENGTH) {
+    return value;
+  }
+  const visible = value.slice(0, MAX_STRING_LENGTH);
+  const omitted = value.length - MAX_STRING_LENGTH;
+  return `${visible}…[truncated ${omitted} chars]`;
+}
+
 function redactConfigFlag(value: string): string {
   return value.replace(/(--config(?:=|\s+))("[^"]+"|'[^']+'|\S+)/gi, (_match, prefix) => `${prefix}***`);
 }
 
 function redactSensitiveStrings(value: string): string {
-  let result = redactConfigFlag(value);
+  let result = clampLargeString(redactConfigFlag(value));
   for (const sensitive of SENSITIVE_VALUES) {
     if (!sensitive) {
       continue;

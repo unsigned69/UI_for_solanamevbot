@@ -3,8 +3,11 @@ import { runPayloadSchema } from '../../../../lib/types/run-schema';
 import { botRunner, PrelaunchCheckError } from '../../../../lib/runner/process-runner';
 import { prepareRunPayload } from '../../../../lib/runner/payload';
 import { uiLogger } from '../../../../lib/log/logger';
+import { withApiLogging } from '../../../../lib/log/with-api-logging';
 
-export async function POST(request: Request) {
+export const runtime = 'nodejs';
+
+async function postHandler(request: Request) {
   const json = await request.json();
   const parsed = runPayloadSchema.safeParse(json);
   if (!parsed.success) {
@@ -39,3 +42,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
+
+export const POST = withApiLogging(postHandler, { routeId: '/api/bot/run' });

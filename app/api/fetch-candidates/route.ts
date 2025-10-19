@@ -2,8 +2,11 @@ import { NextResponse } from 'next/server';
 import { fetchFiltersSchema } from '../../../lib/types/filter-schema';
 import { fetchCandidateSnapshot } from '../../../lib/services/fetch-candidates';
 import { uiLogger } from '../../../lib/log/logger';
+import { withApiLogging } from '../../../lib/log/with-api-logging';
 
-export async function POST(request: Request) {
+export const runtime = 'nodejs';
+
+async function postHandler(request: Request) {
   const body = await request.json();
   const parsed = fetchFiltersSchema.safeParse(body);
   if (!parsed.success) {
@@ -37,3 +40,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 400 });
   }
 }
+
+export const POST = withApiLogging(postHandler, { routeId: '/api/fetch-candidates' });

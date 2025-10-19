@@ -8,6 +8,7 @@ type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 interface LogEntry {
   ts: string;
   lvl: LogLevel;
+  channel: string;
   evt: string;
   msg?: string;
   meta: Record<string, unknown>;
@@ -182,7 +183,13 @@ class RotatingFileLogger {
     });
   }
 
-  public log(level: LogLevel, evt: string, message?: string, meta?: Record<string, unknown>): void {
+  public log(
+    level: LogLevel,
+    evt: string,
+    message?: string,
+    meta?: Record<string, unknown>,
+    channel: string = 'ui',
+  ): void {
     if (!this.enabled) {
       return;
     }
@@ -192,6 +199,7 @@ class RotatingFileLogger {
     const entry: LogEntry = {
       ts: new Date().toISOString(),
       lvl: level,
+      channel,
       evt,
       meta: redactMeta(meta),
     };
@@ -319,20 +327,30 @@ class RotatingFileLogger {
 class UiLogger {
   private readonly writer = new RotatingFileLogger();
 
-  debug(evt: string, meta?: Record<string, unknown>): void {
-    this.writer.log('debug', evt, undefined, meta);
+  debug(evt: string, meta?: Record<string, unknown>, options?: { channel?: string }): void {
+    this.writer.log('debug', evt, undefined, meta, options?.channel);
   }
 
-  info(evt: string, meta?: Record<string, unknown>): void {
-    this.writer.log('info', evt, undefined, meta);
+  info(evt: string, meta?: Record<string, unknown>, options?: { channel?: string }): void {
+    this.writer.log('info', evt, undefined, meta, options?.channel);
   }
 
-  warn(evt: string, message: string, meta?: Record<string, unknown>): void {
-    this.writer.log('warn', evt, message, meta);
+  warn(
+    evt: string,
+    message: string,
+    meta?: Record<string, unknown>,
+    options?: { channel?: string },
+  ): void {
+    this.writer.log('warn', evt, message, meta, options?.channel);
   }
 
-  error(evt: string, message: string, meta?: Record<string, unknown>): void {
-    this.writer.log('error', evt, message, meta);
+  error(
+    evt: string,
+    message: string,
+    meta?: Record<string, unknown>,
+    options?: { channel?: string },
+  ): void {
+    this.writer.log('error', evt, message, meta, options?.channel);
   }
 }
 
