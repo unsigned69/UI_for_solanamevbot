@@ -7,8 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "parser:fetch": "ts-node --transpile-only scripts/parser-cli.ts",
-    "parser:write": "ts-node --transpile-only scripts/parser-cli.ts --write-config"
+    "parser:fetch": "ts-node --transpile-only --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"Node\"}' scripts/parser-cli.ts",
+    "parser:write": "ts-node --transpile-only --compiler-options '{\"module\":\"CommonJS\",\"moduleResolution\":\"Node\"}' scripts/parser-cli.ts --write-config"
   },
   "dependencies": {
     "@iarna/toml": "^2.2.5",
