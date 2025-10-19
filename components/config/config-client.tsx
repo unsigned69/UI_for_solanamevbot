@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ValidationReport } from '../../lib/config/validate';
 import type { ManagedConfig } from '../../lib/types/config';
+import type { StableMode } from '../../lib/types/stable-mode';
 
 interface ReadResponse {
   raw: string;
@@ -10,6 +11,8 @@ interface ReadResponse {
   baseTokens: string[];
   anchorTokens: string[];
   baseAnchorError?: string;
+  stableMode?: StableMode;
+  stableMint?: string;
 }
 
 export default function ConfigClient() {

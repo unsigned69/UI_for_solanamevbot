@@ -2,7 +2,11 @@ import fs from 'fs/promises';
 import path from 'path';
 import { parse } from '@iarna/toml';
 
-/** Этот модуль вызывается и парсером, и экраном Конфига. Он НЕ зависит от runner. */
+/**
+ * Исторический модуль для чтения base/anchor токенов.
+ * После перехода на SOL-центричный режим конфиг больше не содержит эти массивы,
+ * поэтому функция возвращает пустые значения без ошибок для обратной совместимости.
+ */
 
 const BASE_TOKENS_PATH: string[] = ['routing', 'baseTokens'];
 const ANCHOR_TOKENS_PATH: string[] = ['routing', 'anchorTokens'];
@@ -35,16 +39,20 @@ function extractArray(obj: any, pathKeys: string[]): string[] | undefined {
 }
 
 export async function readBaseAnchorTokens(): Promise<BaseAnchorResult> {
-  const filePath = getEnvConfigPath();
-  const raw = await fs.readFile(filePath, 'utf8');
-  const parsed = parse(raw) as Record<string, unknown>;
+  try {
+    const filePath = getEnvConfigPath();
+    const raw = await fs.readFile(filePath, 'utf8');
+    const parsed = parse(raw) as Record<string, unknown>;
 
-  const baseTokens = extractArray(parsed, BASE_TOKENS_PATH) ?? [];
-  const anchorTokens = extractArray(parsed, ANCHOR_TOKENS_PATH) ?? [];
+    const baseTokens = extractArray(parsed, BASE_TOKENS_PATH) ?? [];
+    const anchorTokens = extractArray(parsed, ANCHOR_TOKENS_PATH) ?? [];
 
-  if (baseTokens.length === 0 || anchorTokens.length === 0) {
-    throw new Error('Base/Anchor токены не найдены в конфиге');
+    return { baseTokens, anchorTokens };
+  } catch (error) {
+    if (process.env.NODE_ENV !== 'production') {
+      // eslint-disable-next-line no-console
+      console.debug('[base-anchor-reader] не удалось прочитать base/anchor токены:', error);
+    }
+    return { baseTokens: [], anchorTokens: [] };
   }
-
-  return { baseTokens, anchorTokens };
 }

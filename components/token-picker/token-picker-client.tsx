@@ -7,7 +7,8 @@ import type {
   FetchCandidatesResponsePayload,
   FetchCandidatesSuccessPayload,
 } from '../../lib/types/api/fetch-candidates';
-import { BaseAnchorPanel } from './base-anchor-panel';
+import type { StableMode } from '../../lib/types/stable-mode';
+import { normaliseStableMode } from '../../lib/types/stable-mode';
 import { FiltersPanel, type FiltersChangeHandler } from './filter-panel';
 import { CandidatesTable } from './candidates-table';
 import { DexErrorBanner } from './dex-error-banner';
@@ -77,37 +78,26 @@ export default function TokenPickerClient() {
   const [isLoading, setIsLoading] = useState(false);
   const [lastResponse, setLastResponse] = useState<FetchCandidatesResponsePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [baseTokens, setBaseTokens] = useState<string[]>([]);
-  const [anchorTokens, setAnchorTokens] = useState<string[]>([]);
-  const [baseAnchorError, setBaseAnchorError] = useState<string | null>(null);
+  const [stableMode, setStableMode] = useState<StableMode>('NONE');
+  const [stableMint, setStableMint] = useState<string | null>(null);
 
-  const fetchBaseAnchor = useCallback(async () => {
+  const fetchStableMode = useCallback(async () => {
     const res = await fetch('/api/config/read');
     const data = await res.json();
-    if (data.baseAnchorError) {
-      setBaseAnchorError(String(data.baseAnchorError));
-    } else {
-      setBaseAnchorError(null);
-    }
-    setBaseTokens(Array.isArray(data.baseTokens) ? (data.baseTokens as string[]) : []);
-    setAnchorTokens(Array.isArray(data.anchorTokens) ? (data.anchorTokens as string[]) : []);
+    const mode = normaliseStableMode(data.stableMode);
+    setStableMode(mode);
+    setStableMint(typeof data.stableMint === 'string' ? data.stableMint : null);
   }, []);
 
   useEffect(() => {
-    fetchBaseAnchor();
-  }, [fetchBaseAnchor]);
-
-  const baseAnchorMissing = baseTokens.length === 0 || anchorTokens.length === 0;
-  const canUpdate = !baseAnchorMissing && !baseAnchorError;
+    fetchStableMode();
+  }, [fetchStableMode]);
 
   const handleInputChange = useCallback<FiltersChangeHandler>((key, value) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
   }, []);
 
   const requestCandidates = useCallback(async (): Promise<FetchCandidatesResponsePayload | null> => {
-    if (!canUpdate) {
-      return null;
-    }
     setIsLoading(true);
     setError(null);
     try {
@@ -122,7 +112,11 @@ export default function TokenPickerClient() {
         const failure = {
           errorsByDex,
           updatedAt: ensureTimestamp(data.updatedAt),
+          stableMode: normaliseStableMode(data.stableMode),
+          stableMint: typeof data.stableMint === 'string' ? data.stableMint : undefined,
         } satisfies FetchCandidatesResponsePayload;
+        setStableMode(normaliseStableMode(data.stableMode));
+        setStableMint(typeof data.stableMint === 'string' ? data.stableMint : null);
         setLastResponse(failure);
         return failure;
       }
@@ -138,14 +132,16 @@ export default function TokenPickerClient() {
           typeof data.pageSize === 'number' ? data.pageSize : filters.pageSize ?? defaultFilters.pageSize,
         fetchedAt:
           typeof data.fetchedAt === 'string' ? data.fetchedAt : new Date(updatedAt).toISOString(),
-        baseTokens: Array.isArray(data.baseTokens) ? (data.baseTokens as string[]) : [],
-        anchorTokens: Array.isArray(data.anchorTokens) ? (data.anchorTokens as string[]) : [],
+        baseTokens: [],
+        anchorTokens: [],
         errorsByDex,
         updatedAt,
+        stableMode: normaliseStableMode(data.stableMode),
+        stableMint: typeof data.stableMint === 'string' ? data.stableMint : undefined,
       };
       setLastResponse(success);
-      setBaseTokens(success.baseTokens);
-      setAnchorTokens(success.anchorTokens);
+      setStableMode(success.stableMode ?? 'NONE');
+      setStableMint(success.stableMint ?? null);
       return success;
     } catch (err) {
       setError((err as Error).message);
@@ -153,7 +149,7 @@ export default function TokenPickerClient() {
     } finally {
       setIsLoading(false);
     }
-  }, [filters, canUpdate]);
+  }, [filters]);
 
   const fetchData = useCallback(async () => {
     const data = await requestCandidates();
@@ -179,23 +175,30 @@ export default function TokenPickerClient() {
 
   const dexErrors = lastResponse?.errorsByDex ?? [];
   const allSourcesFailed = lastResponse !== null && !isSuccessResponse(lastResponse) && dexErrors.length > 0;
+  const stableModeLabel = stableMode;
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold text-emerald-300">Подбор токенов</h1>
         <p className="text-sm text-slate-400">
-          Данные загружаются только по кнопке «Обновить данные». Base/Anchor токены читаются из конфига и недоступны для
-          редактирования здесь.
+          Данные загружаются только по кнопке «Обновить данные». SOL используется как маршрутная монета, стейбл-режим выбирается
+          вне UI.
         </p>
       </div>
 
-      <BaseAnchorPanel
-        baseTokens={baseTokens}
-        anchorTokens={anchorTokens}
-        error={baseAnchorError}
-        missing={baseAnchorMissing}
-      />
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-lg border border-slate-800 bg-slate-900/60 px-4 py-3">
+        <p className="text-sm text-slate-300">
+          Маршрут: <span className="font-semibold text-emerald-200">TOKEN ↔ SOL</span>
+        </p>
+        <p className="text-sm text-slate-400">
+          Стейбл-режим: <span className="font-semibold text-emerald-200">{stableModeLabel}</span>{' '}
+          <span className="text-xs text-slate-500">(read-only)</span>
+          {stableModeLabel !== 'NONE' && stableMint && (
+            <span className="ml-2 font-mono text-[10px] text-slate-500">{stableMint}</span>
+          )}
+        </p>
+      </div>
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         <FiltersPanel filters={filters} onChange={handleInputChange} />
@@ -208,7 +211,7 @@ export default function TokenPickerClient() {
               <button
                 className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-700"
                 onClick={fetchData}
-                disabled={!canUpdate || isLoading}
+                disabled={isLoading}
               >
                 {isLoading ? 'Загрузка…' : 'Обновить данные'}
               </button>
@@ -222,7 +225,6 @@ export default function TokenPickerClient() {
 
           <CandidatesTable
             candidates={candidates}
-            canUpdate={canUpdate}
             allSourcesFailed={allSourcesFailed}
             onRefresh={fetchData}
           />

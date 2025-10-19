@@ -1,3 +1,5 @@
+import type { StableMode } from './stable-mode';
+
 export type DexId = 'pumpfun' | 'raydium' | 'meteora';
 export type PoolType = 'CPMM' | 'CLMM' | 'DLMM';
 
@@ -39,6 +41,8 @@ export interface Candidate {
   altCost: number;
   score: number;
   errors?: string[];
+  triEligible?: boolean;
+  triStable?: StableMode | null;
 }
 
 export interface FetchCandidatesResult {

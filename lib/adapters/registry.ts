@@ -30,17 +30,13 @@ function buildDexError(dex: DexId, error: unknown): DexSourceError {
   };
 }
 
-export async function fetchCandidatesAcrossDexes(
-  filters: FetchFilters,
-  baseTokens: string[],
-  anchorTokens: string[],
-): Promise<FetchCandidatesResult> {
+export async function fetchCandidatesAcrossDexes(filters: FetchFilters): Promise<FetchCandidatesResult> {
   const enabledDexes = normaliseDexList(filters.dexes);
   const attemptedDexes = enabledDexes.length ? enabledDexes : (Object.keys(adapters) as DexId[]);
   const targetAdapters = attemptedDexes.map((dex) => adapters[dex]);
 
   const settled = await Promise.allSettled(
-    targetAdapters.map((adapter) => adapter.buildCandidates(filters, baseTokens, anchorTokens)),
+    targetAdapters.map((adapter) => adapter.buildCandidates(filters)),
   );
 
   const aggregate: Candidate[] = [];

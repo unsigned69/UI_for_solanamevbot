@@ -1,4 +1,5 @@
 import type { Candidate, DexSourceError } from '../dex';
+import type { StableMode } from '../stable-mode';
 
 export interface FetchCandidatesSuccessPayload {
   candidates: Candidate[];
@@ -10,11 +11,15 @@ export interface FetchCandidatesSuccessPayload {
   anchorTokens: string[];
   errorsByDex: DexSourceError[];
   updatedAt: number;
+  stableMode?: StableMode;
+  stableMint?: string;
 }
 
 export interface FetchCandidatesFailurePayload {
   errorsByDex: DexSourceError[];
   updatedAt: number;
+  stableMode?: StableMode;
+  stableMint?: string;
 }
 
 export type FetchCandidatesResponsePayload =

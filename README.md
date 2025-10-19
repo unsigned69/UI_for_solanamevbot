@@ -5,7 +5,7 @@
 - Token discovery runs only on demand and aggregates DEX adapters behind a retry-aware service.
 - TOML configuration is edited atomically inside a managed block with validation, diff, backup, and locking.
 - Runner assembles a whitelisted CLI command, spawns the bot without a shell, and streams logs over WebSocket.
-- Base/anchor token lists are read-only: the UI reads them from `config.toml`, edits happen manually.
+- Routing is SOL-centric: WSOL is always the base asset and the stable-mode (USDC/USD1/NONE) is read-only.
 - ALT operations and extra flags are sanitized and validated before any process can start.
 
 _Русская версия документа доступна в [README_ru.md](README_ru.md)._ 
@@ -36,7 +36,7 @@ Three pillars:
 
 Key principles:
 - The parser is decoupled from the bot process and never schedules background work—data refresh happens **only** on button press.
-- Base/anchor tokens live in `config.toml` and are maintained manually; the UI shows them in read-only mode.
+- Routing is SOL-first: the parser always works with WSOL pairs and only one read-only stable-mode (USDC/USD1/NONE).
 - ALT operations map to CLI flags controlled by checkboxes; dry-run mode disables ALT flags automatically.
 - The managed TOML block is written atomically: lock file → temp file → rename → backup → diff.
 
@@ -44,7 +44,8 @@ Key principles:
 Requirements:
 - Node.js 18.18+ (LTS) with npm 9+.
 - Access to a Solana RPC endpoint (a public HTTPS endpoint works).
-- Path to the bot TOML config file with populated base/anchor tokens.
+- Path to the bot TOML config file with tradeable token definitions (mints + pools). Stable-mode is set via env or the
+  unmanaged TOML block.
 
 Project commands:
 ```bash
@@ -68,6 +69,7 @@ Useful URLs:
 | `BOT_CONFIG_PATH` | `/abs/path/to/config.toml` | Absolute path to the TOML config used by the parser, config screen, and runner. |
 | `RPC_ENDPOINT` | `https://api.mainnet-beta.solana.com` | Primary RPC endpoint for the bot; used as a fallback by the parser. |
 | `PARSER_RPC_ENDPOINT` | `https://api.mainnet-beta.solana.com` | RPC endpoint used by adapters when fetching candidates; defaults to `RPC_ENDPOINT`. |
+| `STABLE_MODE` | `NONE` | Forces the SOL↔stable routing leg. Valid values: `USDC`, `USD1`, `NONE`. Overrides config. |
 | `EXTRA_FLAGS_DEFAULT` | `""` (empty) | Extra CLI flags that the runner adds to every command after sanitization. |
 | `SMB_UI_CONFIG_LOCK_TTL_MS` | `120000` | Lifetime of the config lock file (ms). Expired locks are purged automatically. |
 
@@ -75,6 +77,7 @@ Useful URLs:
 ```env
 BOT_CONFIG_PATH=/abs/path/to/config.toml
 PARSER_RPC_ENDPOINT=https://api.mainnet-beta.solana.com
+STABLE_MODE=USDC
 SMB_UI_CONFIG_LOCK_TTL_MS=120000
 ```
 
@@ -82,7 +85,7 @@ SMB_UI_CONFIG_LOCK_TTL_MS=120000
 - **UI (Next.js / React)** – pages `/token-picker`, `/config`, `/run` operate in client mode and talk to API routes.
 - **Candidate service** (`lib/services/fetch-candidates.ts`) – aggregates adapter responses, sorts, deduplicates, paginates, and shapes 200/503 payloads.
 - **DEX adapters** (`lib/adapters/*`) – wrappers over liquidity sources with retry logic, normalized errors, and multi-DEX support.
-- **Config module** (`lib/config/*`) – reads base/anchor lists, parses the managed block, validates, diffs, and performs atomic writes with lock/backups.
+- **Config module** (`lib/config/*`) – resolves the read-only stable-mode, parses the managed block, validates, diffs, and performs atomic writes with lock/backups.
 - **Runner** (`lib/runner/*`) – validates payloads, builds commands, spawns processes without a shell, controls state/log buffers, and broadcasts via WebSocket.
 
 ```mermaid
@@ -99,7 +102,7 @@ graph TD
 ```
 
 ## 5. Token Picker Screen
-The core rule is no auto-refresh: data loads only when the operator clicks “Refresh data.” The parser reads base/anchor tokens from the config; if either list is missing, the UI shows a red banner and disables the button.
+The core rule is no auto-refresh: data loads only when the operator clicks “Refresh data.” Routing is SOL-centric: adapters return only WSOL pairs, the UI always shows the fixed `TOKEN ↔ SOL` route, and a read-only stable-mode indicator (`USDC`/`USD1`/`NONE`) sourced from env/config. No gating is tied to managed token lists.
 
 Available filters (`components/token-picker/filter-panel.tsx`, `lib/types/filter-schema.ts`):
 - DEX: `pumpfun`, `raydium`, `meteora`.
@@ -117,6 +120,7 @@ Error handling:
 - Partial failure → HTTP 200 with table data and a compact `errorsByDex` banner.
 - Complete failure (all adapters down) → HTTP 503, red “all sources unavailable” banner, empty table, refresh button stays enabled.
 - `errorsByDex` provides at most one entry per DEX with the message truncated to 200 characters.
+- When `STABLE_MODE` is `USDC` or `USD1`, the service requires a WSOL↔stable pool and marks matching tokens as `triEligible` (small score bonus + “Tri-arb” badge).
 
 `/api/fetch-candidates` examples:
 ```bash
@@ -128,23 +132,27 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
 ```json
 {
   "updatedAt": 1739900000000,
+  "stableMode": "USDC",
+  "stableMint": "EPjFWdd5AufqSSqeM2qZzEwG7NDT8f9n9whscWUG5t9",
   "candidates": [
     {
-      "mint": "So11111111111111111111111111111111111111112",
+      "mint": "ToKenMint1111111111111111111111111111111111",
       "pools": [{"dex":"raydium","poolId":"...","poolType":"CLMM"}],
       "tvlUsd": 12345.67,
       "vol1h": 890.12,
       "estSlippagePct": 0.42,
       "altCost": 3,
-      "score": 72.4
+      "score": 73.4,
+      "triEligible": true,
+      "triStable": "USDC"
     }
   ],
   "total": 1,
   "page": 1,
   "pageSize": 50,
   "fetchedAt": "2025-02-18T10:13:20.000Z",
-  "baseTokens": ["So111..."],
-  "anchorTokens": ["USDH..."],
+  "baseTokens": [],
+  "anchorTokens": [],
   "errorsByDex": [
     {"dex":"meteora","status":429,"message":"rate limited"}
   ]
@@ -154,6 +162,7 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
 ```json
 {
   "updatedAt": 1739900000000,
+  "stableMode": "NONE",
   "errorsByDex": [
     {"dex":"raydium","status":502,"message":"upstream error"},
     {"dex":"meteora","status":429,"message":"rate limited"},
@@ -172,6 +181,7 @@ curl -s -X POST http://localhost:3000/api/fetch-candidates \
   # <<< SMB-UI MANAGED END
   ```
 - Base/anchor tokens render in a separate read-only block. If loading fails, a red banner appears.
+- Stable-mode (if set) renders in a read-only badge; tradeable tokens are still managed manually in TOML.
 - Before writing, `POST /api/config/write` performs:
   1. Bot status check (`RUNNING`/`STARTING` → 409).
   2. JSON schema validation plus `validateManagedConfig` (ALT/compute checks, ≤100 mints, warnings).
@@ -241,7 +251,7 @@ API smoke tests:
 - `POST /api/bot/run` (valid payload), `POST /api/bot/stop` (graceful stop), WebSocket `/api/bot/attach-logs`.
 
 Manual UI scenarios:
-1. Missing base/anchor lists → red banner, “Refresh data” disabled.
+1. STABLE_MODE unset or invalid → treated as `NONE` and displayed as such in the UI.
 2. Partial adapter failure → table with data plus yellow banner.
 3. Complete failure → red banner, empty table, refresh button enabled.
 4. Config write with active/expired lock.
@@ -257,7 +267,7 @@ Manual UI scenarios:
 - Contacts: Telegram [@Agropilot_UA](https://t.me/Agropilot_UA).
 
 ## Glossary
-- **Base/anchor** – token lists maintained manually in `config.toml`, outside the managed block.
+- **Stable-mode** – read-only setting (ENV or unmanaged TOML) selecting the SOL↔USDC/USD1 leg for triangular routes.
 - **ALT** – Address Lookup Table operations (create/extend/deactivate/close) toggled through CLI flags.
 - **Managed block** – the `config.toml` segment editable between `SMB-UI MANAGED` markers.
 - **503** – API response when all candidate sources fail.
