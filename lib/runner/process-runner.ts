@@ -252,6 +252,10 @@ class BotProcessRunner {
     };
   }
 
+  getSubscriberCount(): number {
+    return this.subscribers.size;
+  }
+
   async start(payload: RunPayload) {
     if (this.process) {
       throw new Error('Бот уже запущен');

@@ -1,9 +1,27 @@
 import { NextResponse } from 'next/server';
+import { randomUUID } from 'crypto';
 import { botRunner } from '../../../../lib/runner/process-runner';
+import { uiLogger } from '../../../../lib/log/logger';
+import { getRequestLogContext, withApiLogging } from '../../../../lib/log/with-api-logging';
+import { redactValue } from '../../../../lib/log/redact';
 
 export const runtime = 'nodejs';
 
-export async function GET(request: Request) {
+const ROUTE_ID = '/api/bot/attach-logs';
+
+function logWsEvent(evt: string, meta: Record<string, unknown>) {
+  uiLogger.info(evt, meta, { channel: 'server' });
+}
+
+function sanitizeReason(reason: unknown): string | undefined {
+  if (typeof reason !== 'string') {
+    return undefined;
+  }
+  const redacted = redactValue(reason);
+  return typeof redacted === 'string' ? redacted : String(redacted);
+}
+
+async function getHandler(request: Request) {
   if (request.headers.get('upgrade') !== 'websocket') {
     return NextResponse.json({ error: 'Expected websocket upgrade' }, { status: 400 });
   }
@@ -20,12 +38,39 @@ export async function GET(request: Request) {
   let closed = false;
   let unsubscribe: (() => void) | null = null;
 
-  const cleanup = () => {
+  const logContext = getRequestLogContext(request);
+  const reqId = logContext?.reqId ?? randomUUID();
+  const clientIp = logContext?.clientIp;
+  const userAgent = logContext?.userAgent ?? request.headers.get('user-agent') ?? undefined;
+
+  const baseMeta = {
+    reqId,
+    route: ROUTE_ID,
+    client_ip: clientIp,
+    ua: userAgent,
+  } satisfies Record<string, unknown>;
+
+  const logStats = (reason: 'attach' | 'detach' | 'state') => {
+    logWsEvent('ws_stats', {
+      ...baseMeta,
+      reason,
+      subscribers_count: botRunner.getSubscriberCount(),
+      state: botRunner.getStatus().state,
+    });
+  };
+
+  const cleanup = (event?: { code?: number; reason?: string }) => {
     if (closed) {
       return;
     }
     closed = true;
     unsubscribe?.();
+    logWsEvent('ws_detach', {
+      ...baseMeta,
+      code: event?.code ?? null,
+      reason: sanitizeReason(event?.reason),
+    });
+    logStats('detach');
     try {
       server.close();
     } catch (error) {
@@ -44,9 +89,14 @@ export async function GET(request: Request) {
     }
   };
 
+  let lastState = botRunner.getStatus().state;
   unsubscribe = botRunner.subscribe(
     (event) => {
       safeSend(event);
+      if (event.type === 'state' && event.state !== lastState) {
+        lastState = event.state;
+        logStats('state');
+      }
     },
     {
       onStop: () => {
@@ -59,8 +109,16 @@ export async function GET(request: Request) {
     },
   );
 
-  server.addEventListener('close', cleanup);
-  server.addEventListener('error', cleanup);
+  logWsEvent('ws_accept', baseMeta);
+  logStats('attach');
+
+  server.addEventListener('close', (event: Event) => {
+    const closeEvent = event as { code?: number; reason?: string };
+    cleanup({ code: closeEvent?.code, reason: closeEvent?.reason });
+  });
+  server.addEventListener('error', () => {
+    cleanup();
+  });
 
   safeSend({ type: 'state', state: botRunner.getStatus().state, status: botRunner.getStatus() });
 
@@ -68,3 +126,5 @@ export async function GET(request: Request) {
   (response as any).webSocket = client;
   return response;
 }
+
+export const GET = withApiLogging(getHandler, { routeId: ROUTE_ID });

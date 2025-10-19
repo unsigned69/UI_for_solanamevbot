@@ -9,8 +9,11 @@ import { validateManagedConfig } from '../../../../lib/config/validate';
 import { diffManagedConfigs } from '../../../../lib/config/diff';
 import { botRunner } from '../../../../lib/runner/process-runner';
 import { uiLogger } from '../../../../lib/log/logger';
+import { withApiLogging } from '../../../../lib/log/with-api-logging';
 
-export async function POST(request: Request) {
+export const runtime = 'nodejs';
+
+async function postHandler(request: Request) {
   const json = await request.json();
   const parsed = managedConfigSchema.safeParse(json);
   if (!parsed.success) {
@@ -84,3 +87,5 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
+
+export const POST = withApiLogging(postHandler, { routeId: '/api/config/write' });
