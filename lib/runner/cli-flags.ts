@@ -13,20 +13,6 @@ export function buildAltFlags(altOps: RunPayload['altOps'] = {}): string[] {
     .map((key) => ALT_FLAG_MAP[key]);
 }
 
-export function buildCommandPreview(payload: RunPayload, baseCommand: string): string {
-  const args: string[] = [baseCommand, '--config', '***'];
-  if (payload.dryRun) {
-    args.push('--dry-run');
-  }
-  args.push(...buildAltFlags(payload.altOps));
-  if (payload.altAddress) {
-    args.push('--alt-address', payload.altAddress);
-  }
-  if (payload.accountsSource === 'manual' && payload.accountsManual?.length) {
-    args.push('--accounts', payload.accountsManual.join(','));
-  }
-  if (payload.extraFlags) {
-    args.push(payload.extraFlags);
-  }
-  return args.join(' ');
+export function buildCommandPreview(baseCommand: string, args: string[]): string {
+  return [baseCommand, ...args].join(' ');
 }
