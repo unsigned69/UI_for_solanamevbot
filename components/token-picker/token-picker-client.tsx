@@ -15,8 +15,8 @@ import { DexErrorBanner } from './dex-error-banner';
 const defaultFilters: FetchFilters = {
   dexes: ['pumpfun', 'raydium', 'meteora'],
   poolTypes: ['CPMM', 'CLMM', 'DLMM'],
-  page: 0,
-  pageSize: 20,
+  page: 1,
+  pageSize: 50,
 };
 
 function isSuccessResponse(
@@ -42,18 +42,26 @@ function normaliseDexErrors(value: unknown): DexSourceError[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.reduce<DexSourceError[]>((acc, item) => {
+  const map = new Map<string, DexSourceError>();
+  value.forEach((item) => {
     if (!item || typeof item !== 'object') {
-      return acc;
+      return;
     }
     const candidate = item as { dex?: unknown; status?: unknown; message?: unknown };
     if (typeof candidate.dex !== 'string' || typeof candidate.message !== 'string') {
-      return acc;
+      return;
+    }
+    if (map.has(candidate.dex)) {
+      return;
     }
     const status = typeof candidate.status === 'number' ? candidate.status : undefined;
-    acc.push({ dex: candidate.dex as DexSourceError['dex'], status, message: candidate.message });
-    return acc;
-  }, []);
+    map.set(candidate.dex, {
+      dex: candidate.dex as DexSourceError['dex'],
+      status,
+      message: candidate.message,
+    });
+  });
+  return Array.from(map.values());
 }
 
 function normaliseCandidates(value: unknown): Candidate[] {
@@ -89,7 +97,8 @@ export default function TokenPickerClient() {
     fetchBaseAnchor();
   }, [fetchBaseAnchor]);
 
-  const canUpdate = baseTokens.length > 0 && anchorTokens.length > 0 && !baseAnchorError;
+  const baseAnchorMissing = baseTokens.length === 0 || anchorTokens.length === 0;
+  const canUpdate = !baseAnchorMissing && !baseAnchorError;
 
   const handleInputChange = useCallback<FiltersChangeHandler>((key, value) => {
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -124,8 +133,9 @@ export default function TokenPickerClient() {
       const success: FetchCandidatesSuccessPayload = {
         candidates: normaliseCandidates(data.candidates),
         total: typeof data.total === 'number' ? data.total : 0,
-        page: typeof data.page === 'number' ? data.page : filters.page ?? 0,
-        pageSize: typeof data.pageSize === 'number' ? data.pageSize : filters.pageSize ?? 20,
+        page: typeof data.page === 'number' ? data.page : filters.page ?? defaultFilters.page,
+        pageSize:
+          typeof data.pageSize === 'number' ? data.pageSize : filters.pageSize ?? defaultFilters.pageSize,
         fetchedAt:
           typeof data.fetchedAt === 'string' ? data.fetchedAt : new Date(updatedAt).toISOString(),
         baseTokens: Array.isArray(data.baseTokens) ? (data.baseTokens as string[]) : [],
@@ -180,7 +190,12 @@ export default function TokenPickerClient() {
         </p>
       </div>
 
-      <BaseAnchorPanel baseTokens={baseTokens} anchorTokens={anchorTokens} error={baseAnchorError} />
+      <BaseAnchorPanel
+        baseTokens={baseTokens}
+        anchorTokens={anchorTokens}
+        error={baseAnchorError}
+        missing={baseAnchorMissing}
+      />
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         <FiltersPanel filters={filters} onChange={handleInputChange} />

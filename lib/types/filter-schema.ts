@@ -14,8 +14,8 @@ export const fetchFiltersSchema = z.object({
   newerThanMinutesExclude: z.number().nonnegative().optional(),
   excludeFrozen: z.boolean().optional(),
   maxAltCost: z.number().nonnegative().optional(),
-  page: z.number().int().nonnegative().optional(),
-  pageSize: z.number().int().positive().max(200).optional(),
+  page: z.number().int().positive().max(1_000_000).default(1),
+  pageSize: z.number().int().positive().max(200).default(50),
 });
 
 export type FetchFilters = z.infer<typeof fetchFiltersSchema>;

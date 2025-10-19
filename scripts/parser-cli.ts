@@ -163,7 +163,7 @@ async function main() {
     printDexErrors(result.errorsByDex);
     if (result.successfulDexes.length === 0) {
       console.error('Все источники вернули ошибку — кандидаты недоступны.');
-      process.exit(1);
+      process.exit(2);
     }
     printCandidates(result.candidates);
 
@@ -190,7 +190,7 @@ async function main() {
       const previous = await readManagedConfig();
       const diff = buildManagedDiff(previous.managed, managedPayload);
       if (diff === 'No changes') {
-        console.log('Изменений не обнаружено — запись пропущена.');
+        console.log('изменений нет');
         return;
       }
       const result = await writeManagedConfig(managedPayload);

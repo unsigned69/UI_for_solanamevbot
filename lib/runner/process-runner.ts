@@ -11,20 +11,33 @@ export type RunnerEvent =
   | { type: 'state'; state: BotState; status: BotStatus }
   | { type: 'log'; stream: 'stdout' | 'stderr'; message: string };
 
-  class BotProcessRunner {
-    private state: BotState = 'IDLE';
-    private process: ChildProcess | null = null;
-    private emitter = new EventEmitter();
-    private subscribers = new Set<(event: RunnerEvent) => void>();
-    private startedAt?: number;
-    private commandPreview = '';
-    private logBuffer: RunnerEvent[] = [];
+type SubscriberRecord = {
+  listener: (event: RunnerEvent) => void;
+  disposeOnStop?: () => void;
+};
 
-  private static readonly LOG_BUFFER_LIMIT = 500;
+class BotProcessRunner {
+  private state: BotState = 'IDLE';
+
+  private process: ChildProcess | null = null;
+
+  private emitter = new EventEmitter();
+
+  private subscribers = new Map<(event: RunnerEvent) => void, SubscriberRecord>();
+
+  private startedAt?: number;
+
+  private commandPreview = '';
+
+  private logBuffer: RunnerEvent[] = [];
+
+  private static readonly LOG_BUFFER_LIMIT = 2_000;
+
   private static readonly LOG_CHUNK_LIMIT = 8_192;
 
-  subscribe(listener: (event: RunnerEvent) => void) {
-    this.subscribers.add(listener);
+  subscribe(listener: (event: RunnerEvent) => void, options: { onStop?: () => void } = {}) {
+    const record: SubscriberRecord = { listener, disposeOnStop: options.onStop };
+    this.subscribers.set(listener, record);
     this.emitter.on('event', listener);
     this.logBuffer.forEach((event) => {
       if (event.type === 'log') {
@@ -32,9 +45,30 @@ export type RunnerEvent =
       }
     });
     return () => {
-      this.subscribers.delete(listener);
-      this.emitter.removeListener('event', listener);
+      this.removeSubscriber(listener, 'manual');
     };
+  }
+
+  private removeSubscriber(listener: (event: RunnerEvent) => void, reason: 'manual' | 'stop') {
+    const record = this.subscribers.get(listener);
+    if (!record) {
+      return;
+    }
+    this.emitter.removeListener('event', listener);
+    this.subscribers.delete(listener);
+    if (reason === 'stop') {
+      try {
+        record.disposeOnStop?.();
+      } catch (error) {
+        // no-op: best effort cleanup
+      }
+    }
+  }
+
+  private disposeSubscribers() {
+    Array.from(this.subscribers.keys()).forEach((listener) => {
+      this.removeSubscriber(listener, 'stop');
+    });
   }
 
   private emit(event: RunnerEvent) {
@@ -73,54 +107,77 @@ export type RunnerEvent =
     }
     this.transition('STARTING');
 
-      try {
-        const baseCommand = getBotCommand();
-        const configPath = getConfigPath();
-        const lockPath = getConfigLockPath();
-        ensureConfigLockNotPresent(lockPath);
+    try {
+      const baseCommand = getBotCommand();
+      const configPath = getConfigPath();
+      const lockPath = getConfigLockPath();
+      ensureConfigLockNotPresent(lockPath);
 
-        const commandBuild = buildRunCommand(payload, {
-          configPath,
-          defaultExtraFlags: getExtraFlagsDefault(),
-          baseCommand,
-        });
-        this.commandPreview = commandBuild.commandPreview;
+      const commandBuild = buildRunCommand(payload, {
+        configPath,
+        defaultExtraFlags: getExtraFlagsDefault(),
+        baseCommand,
+      });
+      this.commandPreview = commandBuild.commandPreview;
 
-        const child = spawn(commandBuild.command, commandBuild.args, {
-          cwd: getBotWorkdir(),
-          shell: false,
-          env: process.env,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
+      const child = spawn(commandBuild.command, commandBuild.args, {
+        cwd: getBotWorkdir(),
+        shell: false,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
       this.process = child;
       this.startedAt = Date.now();
       this.transition('RUNNING');
 
-      child.stdout.on('data', (chunk: Buffer) => {
+      const handleStdout = (chunk: Buffer) => {
         const message = chunk.toString();
         this.emit({ type: 'log', stream: 'stdout', message });
-      });
-
-      child.stderr.on('data', (chunk: Buffer) => {
+      };
+      const handleStderr = (chunk: Buffer) => {
         const message = chunk.toString();
         this.emit({ type: 'log', stream: 'stderr', message });
-      });
+      };
 
-      child.on('close', (code) => {
+      child.stdout?.on('data', handleStdout);
+      child.stderr?.on('data', handleStderr);
+
+      let handleClose: (code: number | null) => void;
+      let handleError: (error: Error) => void;
+
+      const finalize = (state: BotState) => {
+        if (this.process !== child) {
+          return;
+        }
+        child.stdout?.off('data', handleStdout);
+        child.stderr?.off('data', handleStderr);
+        child.removeListener('close', handleClose);
+        child.removeListener('error', handleError);
         this.process = null;
-        this.transition(code === 0 ? 'STOPPED' : 'ERROR');
-      });
+        this.startedAt = undefined;
+        this.commandPreview = '';
+        this.transition(state);
+        this.disposeSubscribers();
+      };
 
-      child.on('error', (error) => {
+      handleClose = (code: number | null) => {
+        finalize(code === 0 ? 'STOPPED' : 'ERROR');
+      };
+
+      handleError = (error: Error) => {
         this.emit({ type: 'log', stream: 'stderr', message: error.message });
-        this.process = null;
-        this.transition('ERROR');
-      });
+        finalize('ERROR');
+      };
+
+      child.once('close', handleClose);
+      child.once('error', handleError);
     } catch (error) {
       this.process = null;
       this.startedAt = undefined;
       this.commandPreview = '';
       this.transition('ERROR');
+      this.disposeSubscribers();
       throw error;
     }
   }

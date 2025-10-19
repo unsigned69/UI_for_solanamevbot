@@ -6,19 +6,51 @@ import type {
   FetchCandidatesSuccessPayload,
 } from '../types/api/fetch-candidates';
 import type { FetchFilters } from '../types/filter-schema';
+import type { Candidate } from '../types/dex';
 
-const DEFAULT_PAGE = 0;
-const DEFAULT_PAGE_SIZE = 20;
+const DEFAULT_PAGE = 1;
+const DEFAULT_PAGE_SIZE = 50;
+const MAX_PAGE_SIZE = 200;
 
 function resolvePage(filters: FetchFilters): number {
-  return typeof filters.page === 'number' && filters.page >= 0 ? filters.page : DEFAULT_PAGE;
+  const raw = filters.page;
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 1) {
+    return raw;
+  }
+  return DEFAULT_PAGE;
 }
 
 function resolvePageSize(filters: FetchFilters): number {
-  if (typeof filters.pageSize === 'number' && filters.pageSize > 0) {
-    return filters.pageSize;
+  const raw = filters.pageSize;
+  if (typeof raw === 'number' && Number.isInteger(raw) && raw > 0) {
+    return Math.min(raw, MAX_PAGE_SIZE);
   }
   return DEFAULT_PAGE_SIZE;
+}
+
+function sortCandidates(candidates: Candidate[]): Candidate[] {
+  return candidates.slice().sort((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    if (b.vol1h !== a.vol1h) {
+      return b.vol1h - a.vol1h;
+    }
+    return a.mint.localeCompare(b.mint);
+  });
+}
+
+function dedupeCandidates(candidates: Candidate[]): Candidate[] {
+  const seen = new Set<string>();
+  const unique: Candidate[] = [];
+  for (const candidate of candidates) {
+    if (seen.has(candidate.mint)) {
+      continue;
+    }
+    seen.add(candidate.mint);
+    unique.push(candidate);
+  }
+  return unique;
 }
 
 function buildSuccessPayload(
@@ -31,13 +63,15 @@ function buildSuccessPayload(
 ): FetchCandidatesSuccessPayload {
   const page = resolvePage(filters);
   const pageSize = resolvePageSize(filters);
-  const start = page * pageSize;
+  const sorted = sortCandidates(candidates);
+  const unique = dedupeCandidates(sorted);
+  const start = (page - 1) * pageSize;
   const end = start + pageSize;
-  const paged = candidates.slice(start, end);
+  const paged = unique.slice(start, end);
 
   return {
     candidates: paged,
-    total: candidates.length,
+    total: unique.length,
     page,
     pageSize,
     fetchedAt: new Date(timestamp).toISOString(),

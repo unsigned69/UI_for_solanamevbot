@@ -34,34 +34,76 @@ export default function RunClient() {
   }, []);
 
   useEffect(() => {
-    const ws = new WebSocket(`${window.location.origin.replace('http', 'ws')}/api/bot/attach-logs`);
-    ws.addEventListener('message', (event) => {
-      try {
-        const data = JSON.parse(event.data) as RunnerEvent;
-        if (data.type === 'state') {
-          setStatus(data.status);
-        } else if (data.type === 'log') {
-          const log: RunnerEventLog = {
-            stream: data.stream as RunnerEventLog['stream'],
-            message: String(data.message ?? ''),
-          };
+    let isActive = true;
+    let socket: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleReconnect = () => {
+      if (!isActive) {
+        return;
+      }
+      if (reconnectTimer !== null) {
+        return;
+      }
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 500);
+    };
+
+    const connect = () => {
+      if (!isActive) {
+        return;
+      }
+      const ws = new WebSocket(`${window.location.origin.replace('http', 'ws')}/api/bot/attach-logs`);
+      socket = ws;
+
+      ws.addEventListener('message', (event) => {
+        try {
+          const data = JSON.parse(event.data) as RunnerEvent;
+          if (data.type === 'state') {
+            setStatus(data.status);
+          } else if (data.type === 'log') {
+            const log: RunnerEventLog = {
+              stream: data.stream as RunnerEventLog['stream'],
+              message: String(data.message ?? ''),
+            };
+            setLogs((prev: RunnerEventLog[]) => {
+              const next: RunnerEventLog[] = [...prev, log];
+              return next.length > 2000 ? next.slice(-2000) : next;
+            });
+          }
+        } catch (error) {
           setLogs((prev: RunnerEventLog[]) => {
-            const next: RunnerEventLog[] = [...prev, log];
-            return next.length > 500 ? next.slice(-500) : next;
+            const next: RunnerEventLog[] = [
+              ...prev,
+              { stream: 'stderr', message: `WS parse error: ${(error as Error).message}` },
+            ];
+            return next.length > 2000 ? next.slice(-2000) : next;
           });
         }
-      } catch (error) {
-        setLogs((prev: RunnerEventLog[]) => {
-          const next: RunnerEventLog[] = [
-            ...prev,
-            { stream: 'stderr', message: `WS parse error: ${(error as Error).message}` },
-          ];
-          return next.length > 500 ? next.slice(-500) : next;
-        });
-      }
-    });
+      });
+
+      ws.addEventListener('close', () => {
+        if (!isActive) {
+          return;
+        }
+        scheduleReconnect();
+      });
+
+      ws.addEventListener('error', () => {
+        ws.close();
+      });
+    };
+
+    connect();
+
     return () => {
-      ws.close();
+      isActive = false;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+      }
+      socket?.close();
     };
   }, []);
 
