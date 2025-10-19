@@ -43,7 +43,7 @@ export async function readBaseAnchorTokens(): Promise<BaseAnchorResult> {
   const anchorTokens = extractArray(parsed, ANCHOR_TOKENS_PATH) ?? [];
 
   if (baseTokens.length === 0 || anchorTokens.length === 0) {
-    throw new Error('Base/Anchor токены не найдены в конфиге. Задайте их вручную.');
+    throw new Error('Base/Anchor токены не найдены в конфиге');
   }
 
   return { baseTokens, anchorTokens };
