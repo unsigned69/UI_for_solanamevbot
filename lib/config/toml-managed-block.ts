@@ -10,8 +10,17 @@ const MANAGED_WARNING_LINE = '# (не редактируйте вручную)';
 const MANAGED_END_MARKER = '# <<< SMB-UI MANAGED END';
 const CONFIG_LOCK_BASENAME = '.smb-ui-config.lock';
 
-const DEFAULT_LOCK_TTL_MS = 10 * 60 * 1000; // 10 минут
+const DEFAULT_LOCK_TTL_MS = 120_000;
 const LOCK_TTL_ENV_KEY = 'SMB_UI_CONFIG_LOCK_TTL_MS';
+
+export class ConfigLockActiveError extends Error {
+  public readonly status = 409;
+
+  constructor(message = 'Конфиг занят другим процессом. Повторите попытку позже.') {
+    super(message);
+    this.name = 'ConfigLockActiveError';
+  }
+}
 
 function resolveConfigPath(): string {
   const configPath = process.env.BOT_CONFIG_PATH;
@@ -138,7 +147,7 @@ async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
         if (removed) {
           continue;
         }
-        throw new Error('Конфиг обновляется другим процессом. Повторите попытку позже.');
+        throw new ConfigLockActiveError();
       }
       throw error;
     }

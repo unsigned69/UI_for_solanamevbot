@@ -44,7 +44,7 @@ export async function fetchCandidatesAcrossDexes(
   );
 
   const aggregate: Candidate[] = [];
-  const errorsByDex: DexSourceError[] = [];
+  const errorsByDex = new Map<DexId, DexSourceError>();
   const successfulDexes: DexId[] = [];
 
   settled.forEach((result, index) => {
@@ -53,13 +53,15 @@ export async function fetchCandidatesAcrossDexes(
       aggregate.push(...result.value);
       successfulDexes.push(dex);
     } else {
-      errorsByDex.push(buildDexError(dex, result.reason));
+      if (!errorsByDex.has(dex)) {
+        errorsByDex.set(dex, buildDexError(dex, result.reason));
+      }
     }
   });
 
   return {
     candidates: aggregate,
-    errorsByDex,
+    errorsByDex: Array.from(errorsByDex.values()),
     successfulDexes,
     attemptedDexes: targetAdapters.map((adapter) => adapter.id),
   };

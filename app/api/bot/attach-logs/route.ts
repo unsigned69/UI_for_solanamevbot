@@ -44,9 +44,20 @@ export async function GET(request: Request) {
     }
   };
 
-  unsubscribe = botRunner.subscribe((event) => {
-    safeSend(event);
-  });
+  unsubscribe = botRunner.subscribe(
+    (event) => {
+      safeSend(event);
+    },
+    {
+      onStop: () => {
+        try {
+          server.close();
+        } catch (error) {
+          // socket may already be closed
+        }
+      },
+    },
+  );
 
   server.addEventListener('close', cleanup);
   server.addEventListener('error', cleanup);

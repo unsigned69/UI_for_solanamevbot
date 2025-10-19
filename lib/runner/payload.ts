@@ -3,24 +3,14 @@ import bs58 from 'bs58';
 import type { RunPayload } from '../types/run';
 import type { RunPayloadInput } from '../types/run-schema';
 import { ALT_FLAG_MAP } from './cli-flags';
-import { ensureLockFreshnessSync, isConfigLockActiveSync } from '../config/toml-managed-block';
+import { ensureLockFreshnessSync, isConfigLockActiveSync, ConfigLockActiveError } from '../config/toml-managed-block';
 
 const BASE58_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-const SHELL_META_CHARS = /[;&|`$<>]/;
-const MAX_MANUAL_ACCOUNTS = 16;
-const MAX_MANUAL_ACCOUNTS_TOTAL_LENGTH = 1024;
+const MAX_MANUAL_ACCOUNTS = 64;
 const EXTRA_FLAG_MAX_COUNT = 16;
 const EXTRA_FLAG_MAX_LENGTH = 64;
-const EXTRA_FLAG_TOTAL_LENGTH = 512;
-const EXTRA_FLAG_ALLOWLIST: RegExp[] = [
-  /^--[a-z0-9][a-z0-9-]*$/i,
-  /^--[a-z0-9][a-z0-9-]*=\d+$/i,
-  /^--[a-z0-9][a-z0-9-]*=[A-Za-z0-9._:\/-]+$/i,
-];
-
-function isAllowedExtraFlag(flag: string): boolean {
-  return EXTRA_FLAG_ALLOWLIST.some((pattern) => pattern.test(flag));
-}
+const EXTRA_FLAG_TOTAL_LENGTH = 256;
+const EXTRA_FLAG_PATTERN = /^--[a-z0-9]+(?:-[a-z0-9]+)*(?:=[a-z0-9]+(?:-[a-z0-9]+)*)?$/;
 
 function sanitizeBase58Address(value: string, context: string): string {
   const trimmed = value.trim();
@@ -59,10 +49,7 @@ function sanitizeExtraFlagsInput(input?: string | string[] | null): string[] {
   }
   let totalLength = 0;
   for (const raw of values) {
-    if (SHELL_META_CHARS.test(raw)) {
-      throw new Error(`Флаг "${raw}" содержит запрещённые символы`);
-    }
-    if (!isAllowedExtraFlag(raw)) {
+    if (!EXTRA_FLAG_PATTERN.test(raw)) {
       throw new Error(`Флаг "${raw}" имеет некорректный формат`);
     }
     if (raw.length > EXTRA_FLAG_MAX_LENGTH) {
@@ -82,7 +69,6 @@ function sanitizeManualAccounts(input?: string[] | null): string[] | undefined {
     return undefined;
   }
   const unique: string[] = [];
-  let totalLength = 0;
   for (const raw of input) {
     if (!raw) {
       continue;
@@ -90,7 +76,6 @@ function sanitizeManualAccounts(input?: string[] | null): string[] | undefined {
     const sanitized = sanitizeBase58Address(raw, 'Manual account');
     if (!unique.includes(sanitized)) {
       unique.push(sanitized);
-      totalLength += sanitized.length;
     }
   }
   if (unique.length === 0) {
@@ -98,9 +83,6 @@ function sanitizeManualAccounts(input?: string[] | null): string[] | undefined {
   }
   if (unique.length > MAX_MANUAL_ACCOUNTS) {
     throw new Error(`Максимум ${MAX_MANUAL_ACCOUNTS} manual accounts`);
-  }
-  if (totalLength > MAX_MANUAL_ACCOUNTS_TOTAL_LENGTH) {
-    throw new Error('Суммарная длина manual accounts слишком велика');
   }
   return unique;
 }
@@ -170,7 +152,7 @@ export function describeCommandArgsForPreview(args: string[], configPath: string
 export function ensureConfigLockNotPresent(lockPath: string) {
   ensureLockFreshnessSync(lockPath);
   if (isConfigLockActiveSync(lockPath)) {
-    throw new Error(
+    throw new ConfigLockActiveError(
       `Конфиг находится в процессе обновления (lock: ${path.basename(lockPath)}). Повторите запуск позже.`,
     );
   }

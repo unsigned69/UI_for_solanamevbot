@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { managedConfigSchema } from '../../../../lib/config/schema';
-import { writeManagedConfig, readManagedConfig } from '../../../../lib/config/toml-managed-block';
+import {
+  writeManagedConfig,
+  readManagedConfig,
+  ConfigLockActiveError,
+} from '../../../../lib/config/toml-managed-block';
 import { validateManagedConfig } from '../../../../lib/config/validate';
 import { diffManagedConfigs } from '../../../../lib/config/diff';
 import { botRunner } from '../../../../lib/runner/process-runner';
@@ -32,6 +36,9 @@ export async function POST(request: Request) {
     const writeResult = await writeManagedConfig(parsed.data);
     return NextResponse.json({ ok: true, diff, validation, backupPath: writeResult.backupPath });
   } catch (error) {
+    if (error instanceof ConfigLockActiveError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
     return NextResponse.json({ error: (error as Error).message }, { status: 500 });
   }
 }
