@@ -1,31 +1,6 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import { TOKEN_2022_PROGRAM_ID, unpackMint } from '@solana/spl-token';
-import { getCached, setCached } from '../utils/cache';
 import type { FetchPoolOptions } from '../types';
-
-const FALLBACK_INFO: Record<string, { decimals: number; mintAuthority: string | null; freezeAuthority: string | null; hasTransferFee: boolean }> = {
-  So11111111111111111111111111111111111111112: {
-    decimals: 9,
-    mintAuthority: null,
-    freezeAuthority: null,
-    hasTransferFee: false,
-  },
-  DezXAZ8z7P5AGL4HnM9Df1t3ZL2uxJm2zG93P7xi5zs: {
-    decimals: 5,
-    mintAuthority: null,
-    freezeAuthority: null,
-    hasTransferFee: false,
-  },
-  Scam111111111111111111111111111111111111111: {
-    decimals: 9,
-    mintAuthority: '6niNz1ScAmMintAuth1111111111111111111111',
-    freezeAuthority: '6niNz1ScAmMintAuth1111111111111111111111',
-    hasTransferFee: true,
-  },
-};
-
-const CACHE_KEY_PREFIX = 'mint-info:';
-const DEFAULT_TTL_MS = 10 * 60 * 1000;
 
 let connection: Connection | null = null;
 let currentEndpoint: string | null = null;
@@ -88,33 +63,20 @@ export async function getMintInfo(
   mintPk: string,
   opts: FetchPoolOptions = {},
 ): Promise<{
-  decimals: number;
+  decimals: number | null;
   mintAuthority: string | null;
   freezeAuthority: string | null;
   hasTransferFee: boolean;
 }> {
-  const cacheKey = `${CACHE_KEY_PREFIX}${mintPk}`;
-  const cached = getCached<{
-    decimals: number;
-    mintAuthority: string | null;
-    freezeAuthority: string | null;
-    hasTransferFee: boolean;
-  }>(cacheKey);
-
-  if (cached) {
-    return cached;
+  const fromRpc = await fetchFromRpc(mintPk, opts.signal);
+  if (fromRpc) {
+    return fromRpc;
   }
 
-  const ttl = opts.cacheTtlMs ?? DEFAULT_TTL_MS;
-  const fromRpc = await fetchFromRpc(mintPk, opts.signal);
-  const fallback = FALLBACK_INFO[mintPk];
-  const value = fromRpc ?? fallback ?? {
-    decimals: 9,
+  return {
+    decimals: null,
     mintAuthority: null,
     freezeAuthority: null,
     hasTransferFee: false,
   };
-
-  setCached(cacheKey, value, ttl);
-  return value;
 }

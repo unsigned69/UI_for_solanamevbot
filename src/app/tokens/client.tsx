@@ -1,7 +1,7 @@
 'use client';
 
 import type { ChangeEvent, FormEvent } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { DEFAULT_FILTERS, parseQueryToFilter } from '@/lib/filters/schema';
 import type { ApiResponse, FilterParams, TokenRow } from '@/lib/types';
@@ -31,13 +31,28 @@ const NUMBER_FIELDS: Array<{
   { key: 'decimalsMin', label: 'Decimals min', step: '1' },
   { key: 'decimalsMax', label: 'Decimals max', step: '1' },
   { key: 'poolFeeBpsMax', label: 'Max Pool Fee (bps)', step: '1' },
-  { key: 'impactPctMax', label: 'Max Impact @ $100 (%)', step: '0.01' },
+  { key: 'impactUsd', label: 'Impact size (USD)', step: '10' },
+  { key: 'impactPctMax', label: 'Max Impact (%)', step: '0.01' },
 ];
 
 function filtersToSearchParams(filters: FilterFormState): URLSearchParams {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(filters)) {
-    params.set(key, String(value));
+  const entries = Object.entries(filters) as Array<[
+    keyof FilterFormState,
+    FilterFormState[keyof FilterFormState],
+  ]>;
+
+  for (const [key, value] of entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    let encoded: string;
+    if (typeof value === 'boolean') {
+      encoded = value ? '1' : '0';
+    } else if (typeof value === 'number') {
+      encoded = Number.isFinite(value) ? String(value) : '';
+    } else {
+      encoded = String(value);
+    }
+
+    params.set(key, encoded);
   }
   return params;
 }
@@ -60,6 +75,8 @@ function formatPercent(value: number | null | undefined): string {
 export default function TokensClient() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const abortRef = useRef<AbortController | null>(null);
+  const lastFetchedQueryRef = useRef<string | null>(null);
 
   const parsedFilters = useMemo(() => parseQueryToFilter(searchParams), [searchParams]);
   const [formState, setFormState] = useState<FilterFormState>(parsedFilters);
@@ -67,37 +84,66 @@ export default function TokensClient() {
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
+  const fetchData = useCallback(
+    async (filters: FilterFormState, queryOverride?: string): Promise<ApiResponse | null> => {
+      const params = filtersToSearchParams(filters);
+      const query = queryOverride ?? params.toString();
+
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      setLoading(true);
+      setError(null);
+      lastFetchedQueryRef.current = query;
+
+      try {
+        const endpoint = query ? `/api/tokens?${query}` : '/api/tokens';
+        const response = await fetch(endpoint, {
+          method: 'GET',
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch tokens (${response.status})`);
+        }
+
+        const body = (await response.json()) as ApiResponse;
+        setRows(body.items);
+        return body;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          return null;
+        }
+
+        setRows([]);
+        setError(err instanceof Error ? err.message : 'Unknown error');
+        return null;
+      } finally {
+        if (abortRef.current === controller) {
+          setLoading(false);
+          abortRef.current = null;
+        }
+      }
+    },
+    [],
+  );
+
   useEffect(() => {
     setFormState(parsedFilters);
-  }, [parsedFilters]);
 
-  const fetchData = useCallback(async (filters: FilterFormState) => {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const params = filtersToSearchParams(filters);
-      const response = await fetch(`/api/tokens?${params.toString()}`, {
-        method: 'GET',
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to fetch tokens (${response.status})`);
-      }
-
-      const body = (await response.json()) as ApiResponse;
-      setRows(body.items);
-    } catch (err) {
-      setRows([]);
-      setError(err instanceof Error ? err.message : 'Unknown error');
-    } finally {
-      setLoading(false);
+    const canonicalQuery = filtersToSearchParams(parsedFilters).toString();
+    if (lastFetchedQueryRef.current !== canonicalQuery) {
+      void fetchData(parsedFilters, canonicalQuery);
     }
-  }, []);
+  }, [fetchData, parsedFilters]);
 
   useEffect(() => {
-    fetchData(parsedFilters);
-  }, [fetchData, parsedFilters]);
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   const handleCheckboxChange = (key: keyof FilterFormState) => (event: ChangeEvent<HTMLInputElement>) => {
     setFormState((prev) => ({ ...prev, [key]: event.target.checked }));
@@ -108,17 +154,23 @@ export default function TokensClient() {
     setFormState((prev) => ({ ...prev, [key]: value === '' ? prev[key] : Number(value) }));
   };
 
-  const handleApply = (event: FormEvent<HTMLFormElement>) => {
+  const handleApply = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const params = filtersToSearchParams(formState);
-    router.replace(`/tokens?${params.toString()}`);
+    const query = params.toString();
+    await fetchData(formState, query);
+    const href = query ? `/tokens?${query}` : '/tokens';
+    router.replace(href, { scroll: false });
   };
 
-  const handleReset = () => {
+  const handleReset = async () => {
     const defaults = { ...DEFAULT_FILTERS };
     setFormState(defaults);
     const params = filtersToSearchParams(defaults);
-    router.replace(`/tokens?${params.toString()}`);
+    const query = params.toString();
+    await fetchData(defaults, query);
+    const href = query ? `/tokens?${query}` : '/tokens';
+    router.replace(href, { scroll: false });
   };
 
   return (
@@ -217,7 +269,7 @@ export default function TokensClient() {
                   <td>{formatPercent(row.spreadRaydiumPct)}</td>
                   <td>{formatPercent(row.spreadMeteoraPct)}</td>
                   <td>{row.raydiumPools.length ? row.raydiumPools.join(', ') : '—'}</td>
-                  <td>{row.meteoraPools > 0 ? `DLMM (${row.meteoraPools})` : '—'}</td>
+                  <td>{row.meteoraPools.length ? row.meteoraPools.join(', ') : '—'}</td>
                   <td>{formatPercent(row.crossDexSpreadPct)}</td>
                   <td>{formatNumber(row.tvlUsd, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</td>
                   <td>{formatNumber(row.volume24hUsd, { style: 'currency', currency: 'USD', maximumFractionDigits: 0 })}</td>

@@ -1,175 +1,124 @@
 import type { FetchPoolOptions, UnifiedPool } from '../types';
-import { getCached, setCached } from '../utils/cache';
 
-const CACHE_KEY = 'meteora:pools';
-const DEFAULT_TTL_MS = 5 * 60 * 1000;
+const METEORA_API_URL = 'https://dlmm-api.meteora.ag/pools';
 
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const BONK_MINT = 'DezXAZ8z7P5AGL4HnM9Df1t3ZL2uxJm2zG93P7xi5zs';
-const SCAM_MINT = 'Scam111111111111111111111111111111111111111';
-const USDC_MINT = 'EPjFWdd5AufqSSqeM2q8B6CcneEBK8U9GweN7otMfL6';
+type MeteoraApiEntry = Record<string, unknown>;
 
-const SAMPLE_METEORA_POOLS: UnifiedPool[] = [
-  {
-    id: 'meteora-sol-usdc-dlmm',
+function parseNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
+
+function parseString(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  return undefined;
+}
+
+function parseTimestamp(value: unknown): number | undefined {
+  const numeric = parseNumber(value);
+  if (typeof numeric === 'number') {
+    return numeric;
+  }
+  return undefined;
+}
+
+function parseBins(entry: MeteoraApiEntry) {
+  if (!Array.isArray(entry.bins)) {
+    return undefined;
+  }
+
+  const bins = (entry.bins as Array<Record<string, unknown>>)
+    .map((bin) => {
+      const priceUsd = parseNumber(bin.price ?? bin.priceUsd);
+      const baseLiquidity = parseNumber(bin.baseLiquidity ?? bin.baseReserve ?? bin.liquidityBase);
+      if (typeof priceUsd === 'number' && typeof baseLiquidity === 'number' && baseLiquidity > 0) {
+        return { priceUsd, baseLiquidity };
+      }
+      return null;
+    })
+    .filter((value): value is { priceUsd: number; baseLiquidity: number } => value !== null);
+
+  return bins.length ? bins : undefined;
+}
+
+function normalisePool(entry: MeteoraApiEntry): UnifiedPool | null {
+  const baseMint = parseString(entry.baseMint);
+  const quoteMint = parseString(entry.quoteMint);
+  if (!baseMint || !quoteMint) {
+    return null;
+  }
+
+  return {
+    id: parseString(entry.id) ?? `${baseMint}:${quoteMint}`,
     dex: 'METEORA_DLMM',
     type: 'DLMM',
-    baseMint: SOL_MINT,
-    quoteMint: USDC_MINT,
-    baseSymbol: 'SOL',
-    quoteSymbol: 'USDC',
-    priceUsd: 148.6,
-    bestBidPriceUsd: 148.4,
-    bestAskPriceUsd: 148.8,
-    tvlUsd: 480_000,
-    volume24hUsd: 260_000,
-    feeBps: 45,
-    createdAt: Date.now() - 200 * 24 * 60 * 60 * 1000,
-    dlmmBins: [
-      { priceUsd: 148.2, baseLiquidity: 110 },
-      { priceUsd: 148.5, baseLiquidity: 130 },
-      { priceUsd: 148.9, baseLiquidity: 90 },
-    ],
-  },
-  {
-    id: 'meteora-bonk-usdc-dlmm',
-    dex: 'METEORA_DLMM',
-    type: 'DLMM',
-    baseMint: BONK_MINT,
-    quoteMint: USDC_MINT,
-    baseSymbol: 'BONK',
-    quoteSymbol: 'USDC',
-    priceUsd: 0.0000221,
-    bestBidPriceUsd: 0.0000219,
-    bestAskPriceUsd: 0.0000224,
-    tvlUsd: 142_000,
-    volume24hUsd: 58_000,
-    feeBps: 55,
-    createdAt: Date.now() - 150 * 24 * 60 * 60 * 1000,
-    dlmmBins: [
-      { priceUsd: 0.0000219, baseLiquidity: 2_200_000_000 },
-      { priceUsd: 0.0000222, baseLiquidity: 1_700_000_000 },
-      { priceUsd: 0.0000225, baseLiquidity: 1_400_000_000 },
-    ],
-  },
-  {
-    id: 'meteora-scam-usdc-dlmm',
-    dex: 'METEORA_DLMM',
-    type: 'DLMM',
-    baseMint: SCAM_MINT,
-    quoteMint: USDC_MINT,
-    baseSymbol: 'SCAM',
-    quoteSymbol: 'USDC',
-    priceUsd: 0.38,
-    bestBidPriceUsd: 0.37,
-    bestAskPriceUsd: 0.39,
-    tvlUsd: 14_000,
-    volume24hUsd: 3_200,
-    feeBps: 95,
-    createdAt: Date.now() - 5 * 24 * 60 * 60 * 1000,
-    dlmmBins: [
-      { priceUsd: 0.37, baseLiquidity: 8_000 },
-      { priceUsd: 0.39, baseLiquidity: 6_500 },
-    ],
-  },
-];
+    baseMint,
+    quoteMint,
+    baseSymbol: parseString(entry.baseSymbol) ?? parseString(entry.base) ?? undefined,
+    quoteSymbol: parseString(entry.quoteSymbol) ?? parseString(entry.quote) ?? undefined,
+    priceUsd: parseNumber(entry.priceUsd ?? entry.price),
+    bestBidPriceUsd: parseNumber(entry.bestBidUsd ?? entry.bestBid),
+    bestAskPriceUsd: parseNumber(entry.bestAskUsd ?? entry.bestAsk),
+    tvlUsd: parseNumber(entry.tvlUsd ?? entry.tvl ?? entry.totalValueLocked),
+    volume24hUsd: parseNumber(entry.volume24hUsd ?? entry.volume24h ?? entry.volume_24h_usd),
+    feeBps: parseNumber(entry.feeBps ?? entry.fee_bps ?? entry.fee),
+    createdAt: parseTimestamp(entry.createdAt ?? entry.openTime ?? entry.openTimestamp ?? entry.openedAt),
+    dlmmBins: parseBins(entry),
+  };
+}
 
-async function fetchFromApi(signal?: AbortSignal): Promise<UnifiedPool[] | null> {
+async function fetchFromApi(signal?: AbortSignal): Promise<UnifiedPool[]> {
   try {
-    const response = await fetch('https://dlmm-api.meteora.ag/pools', {
+    const response = await fetch(METEORA_API_URL, {
       headers: {
         'User-Agent': 'solana-tokens-dashboard/1.0',
         Accept: 'application/json',
       },
+      cache: 'no-store',
       signal,
     });
 
     if (!response.ok) {
-      return null;
+      return [];
     }
 
     const payload = (await response.json()) as unknown;
-    if (!payload || typeof payload !== 'object') {
-      return null;
-    }
-
     const dataArray = Array.isArray((payload as { data?: unknown }).data)
-      ? ((payload as { data?: unknown }).data as Record<string, unknown>[])
+      ? ((payload as { data?: unknown }).data as MeteoraApiEntry[])
       : Array.isArray(payload)
-        ? (payload as Record<string, unknown>[])
-        : null;
-
-    if (!dataArray) {
-      return null;
-    }
+        ? (payload as MeteoraApiEntry[])
+        : [];
 
     const pools: UnifiedPool[] = [];
-    for (const entry of dataArray.slice(0, 200)) {
-      const baseMint = typeof entry.baseMint === 'string' ? entry.baseMint : undefined;
-      const quoteMint = typeof entry.quoteMint === 'string' ? entry.quoteMint : undefined;
-      if (!baseMint || !quoteMint) {
+    for (const entry of dataArray) {
+      if (!entry || typeof entry !== 'object') {
         continue;
       }
 
-      const bins = Array.isArray(entry.bins)
-        ? (entry.bins as Array<Record<string, unknown>>)
-            .map((bin) => {
-              const priceUsd = typeof bin.price === 'number' ? bin.price : undefined;
-              const liquidity = typeof bin.baseLiquidity === 'number' ? bin.baseLiquidity : undefined;
-              if (priceUsd && liquidity && liquidity > 0) {
-                return { priceUsd, baseLiquidity: liquidity };
-              }
-              return null;
-            })
-            .filter((value): value is { priceUsd: number; baseLiquidity: number } => value !== null)
-        : undefined;
-
-      pools.push({
-        id: typeof entry.id === 'string' ? entry.id : `${baseMint}:${quoteMint}`,
-        dex: 'METEORA_DLMM',
-        type: 'DLMM',
-        baseMint,
-        quoteMint,
-        baseSymbol: typeof entry.baseSymbol === 'string' ? entry.baseSymbol : undefined,
-        quoteSymbol: typeof entry.quoteSymbol === 'string' ? entry.quoteSymbol : undefined,
-        priceUsd: typeof entry.price === 'number' ? entry.price : undefined,
-        bestBidPriceUsd: typeof entry.bestBid === 'number' ? entry.bestBid : undefined,
-        bestAskPriceUsd: typeof entry.bestAsk === 'number' ? entry.bestAsk : undefined,
-        tvlUsd: typeof entry.tvl === 'number' ? entry.tvl : undefined,
-        volume24hUsd: typeof entry.volume24hUsd === 'number' ? entry.volume24hUsd : undefined,
-        feeBps: typeof entry.feeBps === 'number' ? entry.feeBps : undefined,
-        createdAt:
-          typeof entry.createdAt === 'number'
-            ? entry.createdAt
-            : typeof entry.openTime === 'number'
-              ? entry.openTime
-              : undefined,
-        dlmmBins: bins,
-      });
+      const normalised = normalisePool(entry as MeteoraApiEntry);
+      if (normalised) {
+        pools.push(normalised);
+      }
     }
 
-    return pools.length ? pools : null;
+    return pools;
   } catch (error) {
     console.warn('Failed to fetch Meteora pools from API:', error);
-    return null;
+    return [];
   }
 }
 
 export async function fetchMeteoraDlmmPools(opts: FetchPoolOptions = {}): Promise<UnifiedPool[]> {
-  const cached = getCached<UnifiedPool[]>(CACHE_KEY);
-  if (cached) {
-    return cached;
-  }
-
-  const ttl = opts.cacheTtlMs ?? DEFAULT_TTL_MS;
-  const apiData = await fetchFromApi(opts.signal);
-  const pools = apiData && apiData.length > 0 ? apiData : SAMPLE_METEORA_POOLS;
-  setCached(CACHE_KEY, pools, ttl);
-  return pools;
+  return fetchFromApi(opts.signal);
 }
-
-export const METEORA_SAMPLE_MINTS = {
-  SOL_MINT,
-  BONK_MINT,
-  SCAM_MINT,
-};

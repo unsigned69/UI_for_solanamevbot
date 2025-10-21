@@ -40,7 +40,7 @@ export interface TokenRow {
   spreadRaydiumPct: number | null;
   spreadMeteoraPct: number | null;
   raydiumPools: string[];
-  meteoraPools: number;
+  meteoraPools: string[];
   crossDexSpreadPct: number | null;
   tvlUsd: number | null;
   volume24hUsd: number | null;
@@ -78,6 +78,5 @@ export interface ApiResponse {
 }
 
 export interface FetchPoolOptions {
-  cacheTtlMs?: number;
   signal?: AbortSignal;
 }
