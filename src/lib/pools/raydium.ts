@@ -1,203 +1,136 @@
 import type { FetchPoolOptions, UnifiedPool } from '../types';
-import { getCached, setCached } from '../utils/cache';
 
-const CACHE_KEY = 'raydium:pools';
-const DEFAULT_TTL_MS = 5 * 60 * 1000;
+const RAYDIUM_API_URL = 'https://api-v3.raydium.io/pairs';
 
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
-const BONK_MINT = 'DezXAZ8z7P5AGL4HnM9Df1t3ZL2uxJm2zG93P7xi5zs';
-const SCAM_MINT = 'Scam111111111111111111111111111111111111111';
-const USDC_MINT = 'EPjFWdd5AufqSSqeM2q8B6CcneEBK8U9GweN7otMfL6';
+type RaydiumApiEntry = Record<string, unknown>;
 
-const SAMPLE_RAYDIUM_POOLS: UnifiedPool[] = [
-  {
-    id: 'raydium-sol-usdc-amm',
-    dex: 'RAYDIUM_AMM',
-    type: 'AMM',
-    baseMint: SOL_MINT,
-    quoteMint: USDC_MINT,
-    baseSymbol: 'SOL',
-    quoteSymbol: 'USDC',
-    priceUsd: 148.35,
-    bestBidPriceUsd: 148.2,
-    bestAskPriceUsd: 148.5,
-    tvlUsd: 520_000,
-    volume24hUsd: 410_000,
-    feeBps: 25,
-    createdAt: Date.now() - 420 * 24 * 60 * 60 * 1000,
-    reserves: {
-      base: 3_200,
-      quote: 474_720,
-    },
-  },
-  {
-    id: 'raydium-sol-usdc-cpmm',
-    dex: 'RAYDIUM_CPMM',
-    type: 'CPMM',
-    baseMint: SOL_MINT,
-    quoteMint: USDC_MINT,
-    baseSymbol: 'SOL',
-    quoteSymbol: 'USDC',
-    priceUsd: 147.9,
-    bestBidPriceUsd: 147.7,
-    bestAskPriceUsd: 148.1,
-    tvlUsd: 360_000,
-    volume24hUsd: 280_000,
-    feeBps: 35,
-    createdAt: Date.now() - 310 * 24 * 60 * 60 * 1000,
-    reserves: {
-      base: 2_700,
-      quote: 399_330,
-    },
-  },
-  {
-    id: 'raydium-bonk-usdc-amm',
-    dex: 'RAYDIUM_AMM',
-    type: 'AMM',
-    baseMint: BONK_MINT,
-    quoteMint: USDC_MINT,
-    baseSymbol: 'BONK',
-    quoteSymbol: 'USDC',
-    priceUsd: 0.0000218,
-    bestBidPriceUsd: 0.0000216,
-    bestAskPriceUsd: 0.000022,
-    tvlUsd: 135_000,
-    volume24hUsd: 42_000,
-    feeBps: 30,
-    createdAt: Date.now() - 280 * 24 * 60 * 60 * 1000,
-    reserves: {
-      base: 6_200_000_000,
-      quote: 135_160,
-    },
-  },
-  {
-    id: 'raydium-bonk-usdc-cpmm',
-    dex: 'RAYDIUM_CPMM',
-    type: 'CPMM',
-    baseMint: BONK_MINT,
-    quoteMint: USDC_MINT,
-    baseSymbol: 'BONK',
-    quoteSymbol: 'USDC',
-    priceUsd: 0.0000224,
-    bestBidPriceUsd: 0.0000221,
-    bestAskPriceUsd: 0.0000227,
-    tvlUsd: 98_000,
-    volume24hUsd: 35_000,
-    feeBps: 40,
-    createdAt: Date.now() - 260 * 24 * 60 * 60 * 1000,
-    reserves: {
-      base: 4_300_000_000,
-      quote: 96_320,
-    },
-  },
-  {
-    id: 'raydium-scam-usdc-cpmm',
-    dex: 'RAYDIUM_CPMM',
-    type: 'CPMM',
-    baseMint: SCAM_MINT,
-    quoteMint: USDC_MINT,
-    baseSymbol: 'SCAM',
-    quoteSymbol: 'USDC',
-    priceUsd: 0.42,
-    bestBidPriceUsd: 0.41,
-    bestAskPriceUsd: 0.43,
-    tvlUsd: 12_000,
-    volume24hUsd: 4_500,
-    feeBps: 120,
-    createdAt: Date.now() - 1 * 24 * 60 * 60 * 1000,
-    reserves: {
-      base: 35_000,
-      quote: 14_700,
-    },
-  },
-];
+function parseNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
+}
 
-async function fetchFromApi(signal?: AbortSignal): Promise<UnifiedPool[] | null> {
+function parseString(value: unknown): string | undefined {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  return undefined;
+}
+
+function parseTimestamp(value: unknown): number | undefined {
+  const numeric = parseNumber(value);
+  if (typeof numeric === 'number') {
+    return numeric;
+  }
+  return undefined;
+}
+
+function extractReserves(entry: RaydiumApiEntry) {
+  const liquidity = entry.liquidity;
+  const base = parseNumber(
+    (liquidity && typeof liquidity === 'object' ? (liquidity as { base?: unknown }).base : undefined) ??
+      entry.baseReserve ??
+      entry.baseLiquidity ??
+      entry.baseAmount ??
+      entry.baseQuantity,
+  );
+  const quote = parseNumber(
+    (liquidity && typeof liquidity === 'object' ? (liquidity as { quote?: unknown }).quote : undefined) ??
+      entry.quoteReserve ??
+      entry.quoteLiquidity ??
+      entry.quoteAmount ??
+      entry.quoteQuantity,
+  );
+
+  if (typeof base === 'number' && typeof quote === 'number') {
+    return { base, quote };
+  }
+  return undefined;
+}
+
+function normalisePool(entry: RaydiumApiEntry): UnifiedPool | null {
+  const baseMint = parseString(entry.baseMint);
+  const quoteMint = parseString(entry.quoteMint);
+  if (!baseMint || !quoteMint) {
+    return null;
+  }
+
+  const id = parseString(entry.id) ?? `${baseMint}:${quoteMint}`;
+  const marketRaw = parseString(entry.market) ?? parseString(entry.ammType) ?? parseString(entry.poolType) ?? 'AMM';
+  const market = marketRaw.toUpperCase();
+  const dex = market.includes('CPMM') ? 'RAYDIUM_CPMM' : 'RAYDIUM_AMM';
+  const reserves = extractReserves(entry);
+
+  return {
+    id,
+    dex,
+    type: dex === 'RAYDIUM_CPMM' ? 'CPMM' : 'AMM',
+    baseMint,
+    quoteMint,
+    baseSymbol: parseString(entry.baseSymbol) ?? parseString(entry.baseSymbolName) ?? parseString(entry.base),
+    quoteSymbol: parseString(entry.quoteSymbol) ?? parseString(entry.quoteSymbolName) ?? parseString(entry.quote),
+    priceUsd: parseNumber(entry.priceUsd ?? entry.price ?? entry.midPrice ?? entry.latestPrice),
+    bestBidPriceUsd: parseNumber(entry.bestBidUsd ?? entry.bestBid ?? entry.bid),
+    bestAskPriceUsd: parseNumber(entry.bestAskUsd ?? entry.bestAsk ?? entry.ask),
+    tvlUsd: parseNumber(entry.tvlUsd ?? entry.tvl ?? entry.liquidityUsd ?? entry.totalValue),
+    volume24hUsd: parseNumber(entry.volume24hUsd ?? entry.volume24h ?? entry.volume_24h_usd ?? entry.volume_24h),
+    feeBps: parseNumber(entry.feeBps ?? entry.fee_bps ?? entry.fee ?? entry.feeRate),
+    createdAt:
+      parseTimestamp(entry.createdAt ?? entry.openTime ?? entry.createdTime ?? entry.openTimestamp ?? entry.openedAt) ??
+      undefined,
+    reserves,
+  };
+}
+
+async function fetchFromApi(signal?: AbortSignal): Promise<UnifiedPool[]> {
   try {
-    const response = await fetch('https://api-v3.raydium.io/pairs', {
+    const response = await fetch(`${RAYDIUM_API_URL}?limit=500`, {
       headers: {
         'User-Agent': 'solana-tokens-dashboard/1.0',
         Accept: 'application/json',
       },
+      cache: 'no-store',
       signal,
     });
 
     if (!response.ok) {
-      return null;
+      return [];
     }
 
     const payload = (await response.json()) as unknown;
-    if (!payload || typeof payload !== 'object') {
-      return null;
-    }
-
     const dataArray = Array.isArray((payload as { data?: unknown }).data)
-      ? ((payload as { data?: unknown }).data as Record<string, unknown>[])
+      ? ((payload as { data?: unknown }).data as RaydiumApiEntry[])
       : Array.isArray(payload)
-        ? (payload as Record<string, unknown>[])
-        : null;
-
-    if (!dataArray) {
-      return null;
-    }
+        ? (payload as RaydiumApiEntry[])
+        : [];
 
     const pools: UnifiedPool[] = [];
-    for (const entry of dataArray.slice(0, 200)) {
-      const baseMint = typeof entry.baseMint === 'string' ? entry.baseMint : undefined;
-      const quoteMint = typeof entry.quoteMint === 'string' ? entry.quoteMint : undefined;
-      if (!baseMint || !quoteMint) {
+    for (const entry of dataArray) {
+      if (!entry || typeof entry !== 'object') {
         continue;
       }
 
-      const id = typeof entry.id === 'string' ? entry.id : `${baseMint}:${quoteMint}`;
-      const type = typeof entry.market === 'string' ? entry.market.toUpperCase() : 'AMM';
-      const dex = type.includes('CPMM') ? 'RAYDIUM_CPMM' : 'RAYDIUM_AMM';
-
-      pools.push({
-        id,
-        dex,
-        type: dex === 'RAYDIUM_CPMM' ? 'CPMM' : 'AMM',
-        baseMint,
-        quoteMint,
-        baseSymbol: typeof entry.baseSymbol === 'string' ? entry.baseSymbol : undefined,
-        quoteSymbol: typeof entry.quoteSymbol === 'string' ? entry.quoteSymbol : undefined,
-        priceUsd: typeof entry.price === 'number' ? entry.price : undefined,
-        bestBidPriceUsd: typeof entry.bestBid === 'number' ? entry.bestBid : undefined,
-        bestAskPriceUsd: typeof entry.bestAsk === 'number' ? entry.bestAsk : undefined,
-        tvlUsd: typeof entry.tvl === 'number' ? entry.tvl : undefined,
-        volume24hUsd: typeof entry.volume24hUsd === 'number' ? entry.volume24hUsd : undefined,
-        feeBps: typeof entry.feeBps === 'number' ? entry.feeBps : undefined,
-        createdAt:
-          typeof entry.createdAt === 'number'
-            ? entry.createdAt
-            : typeof entry.openTime === 'number'
-              ? entry.openTime
-              : undefined,
-      });
+      const normalised = normalisePool(entry as RaydiumApiEntry);
+      if (normalised) {
+        pools.push(normalised);
+      }
     }
 
-    return pools.length ? pools : null;
+    return pools;
   } catch (error) {
     console.warn('Failed to fetch Raydium pools from API:', error);
-    return null;
+    return [];
   }
 }
 
 export async function fetchRaydiumPools(opts: FetchPoolOptions = {}): Promise<UnifiedPool[]> {
-  const cached = getCached<UnifiedPool[]>(CACHE_KEY);
-  if (cached) {
-    return cached;
-  }
-
-  const ttl = opts.cacheTtlMs ?? DEFAULT_TTL_MS;
-  const apiData = await fetchFromApi(opts.signal);
-  const pools = apiData && apiData.length > 0 ? apiData : SAMPLE_RAYDIUM_POOLS;
-  setCached(CACHE_KEY, pools, ttl);
-  return pools;
+  return fetchFromApi(opts.signal);
 }
-
-export const RAYDIUM_SAMPLE_MINTS = {
-  SOL_MINT,
-  BONK_MINT,
-  SCAM_MINT,
-};

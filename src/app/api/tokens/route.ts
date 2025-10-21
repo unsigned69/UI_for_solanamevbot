@@ -12,11 +12,11 @@ import type { TokenRow, UnifiedPool } from '@/lib/types';
 
 export const runtime = 'nodejs';
 export const revalidate = 0;
+export const dynamic = 'force-dynamic';
 
 const SYMBOL_FALLBACKS: Record<string, string> = {
   So11111111111111111111111111111111111111112: 'SOL',
   DezXAZ8z7P5AGL4HnM9Df1t3ZL2uxJm2zG93P7xi5zs: 'BONK',
-  Scam111111111111111111111111111111111111111: 'SCAM',
 };
 
 function selectDexPools(pools: UnifiedPool[], params: ReturnType<typeof parseQueryToFilter>): UnifiedPool[] {
@@ -50,7 +50,11 @@ function collectPrices(pools: UnifiedPool[]): number[] {
   return prices;
 }
 
-async function buildTokenRows(allPools: UnifiedPool[], params: ReturnType<typeof parseQueryToFilter>): Promise<TokenRow[]> {
+async function buildTokenRows(
+  allPools: UnifiedPool[],
+  params: ReturnType<typeof parseQueryToFilter>,
+  signal?: AbortSignal,
+): Promise<TokenRow[]> {
   const grouped = groupPoolsByMint(allPools);
   const rows: TokenRow[] = [];
 
@@ -62,12 +66,41 @@ async function buildTokenRows(allPools: UnifiedPool[], params: ReturnType<typeof
       continue;
     }
 
+    const symbolFromPools = pools.find((pool) => pool.baseSymbol)?.baseSymbol ?? null;
+    const priceIdentifiers = [mint];
+    if (symbolFromPools) {
+      priceIdentifiers.push(symbolFromPools);
+    }
+    const fallbackSymbol = SYMBOL_FALLBACKS[mint];
+    if (fallbackSymbol) {
+      priceIdentifiers.push(fallbackSymbol);
+    }
+
     const [{ decimals, mintAuthority, freezeAuthority, hasTransferFee }, priceResult] = await Promise.all([
-      getMintInfo(mint),
-      getUsdPrice(mint),
+      getMintInfo(mint, { signal }),
+      getUsdPrice(mint, { signal, identifiers: priceIdentifiers }),
     ]);
 
-    const symbolFromPools = pools.find((pool) => pool.baseSymbol)?.baseSymbol;
+    const raydiumPoolLabels: string[] = [];
+    const raydiumIds = new Set<string>();
+    for (const pool of raydiumPools) {
+      if (!raydiumIds.has(pool.id)) {
+        raydiumIds.add(pool.id);
+        raydiumPoolLabels.push(`${pool.type} (${pool.id})`);
+      }
+    }
+    raydiumPoolLabels.sort();
+
+    const meteoraPoolLabels: string[] = [];
+    const meteoraIds = new Set<string>();
+    for (const pool of meteoraPools) {
+      if (!meteoraIds.has(pool.id)) {
+        meteoraIds.add(pool.id);
+        meteoraPoolLabels.push(`DLMM (${pool.id})`);
+      }
+    }
+    meteoraPoolLabels.sort();
+
     const symbol = symbolFromPools ?? SYMBOL_FALLBACKS[mint] ?? mint.slice(0, 4);
 
     const raydiumSpread = calculateSpreadPercent(collectPrices(raydiumPools));
@@ -122,8 +155,8 @@ async function buildTokenRows(allPools: UnifiedPool[], params: ReturnType<typeof
       priceConfidence: priceResult.confidence,
       spreadRaydiumPct: raydiumSpread,
       spreadMeteoraPct: meteoraSpread,
-      raydiumPools: Array.from(new Set(raydiumPools.map((pool) => pool.type))).sort(),
-      meteoraPools: meteoraPools.length,
+      raydiumPools: raydiumPoolLabels,
+      meteoraPools: meteoraPoolLabels,
       crossDexSpreadPct: crossDexSpread,
       tvlUsd: aggregatedTvl,
       volume24hUsd: aggregatedVolume,
@@ -149,12 +182,14 @@ export async function GET(request: NextRequest) {
   ]);
 
   const selectedPools = selectDexPools([...raydium, ...meteora], params);
-  const rows = await buildTokenRows(selectedPools, params);
+  const rows = await buildTokenRows(selectedPools, params, request.signal);
   const filtered = applyFilters(rows, params);
 
-  return NextResponse.json({
+  const response = NextResponse.json({
     params,
     count: filtered.length,
     items: filtered,
   });
+  response.headers.set('Cache-Control', 'no-store');
+  return response;
 }
